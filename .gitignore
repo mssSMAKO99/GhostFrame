@@ -1,0 +1,27 @@
+# Служебные папки и файлы Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+*.sln.docstates
+
+# Все папки компиляции и логов (включая вложенные)
+**/Release/
+**/Debug/
+**/x64/
+**/x86/
+*.tlog/
+*.log
+*.recipe
+
+# Скомпилированные бинарники и промежуточные файлы
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.iobj
+*.ipdb
+*.obj
+*.res
+*.pch

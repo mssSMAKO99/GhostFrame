@@ -1,0 +1,5 @@
+#include "resource.h"
+
+IDR_HOOK_DLL_64   RCDATA "HideHook64.dll"
+IDR_HELPER_EXE_32 RCDATA "Helper32.exe"
+IDR_HOOK_DLL_32   RCDATA "HideHook32.dll"
