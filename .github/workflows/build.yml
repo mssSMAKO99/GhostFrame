@@ -18,12 +18,12 @@ jobs:
 
       - name: Build x86 Payloads (HideHook32 & Helper32)
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=HideHook32 /p:SolutionDir="${{ github.workspace }}\" /p:OutDir="${{ github.workspace }}\HookLauncher64\\"
-          msbuild Helper32/Helper32.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=Helper32 /p:SolutionDir="${{ github.workspace }}\" /p:OutDir="${{ github.workspace }}\HookLauncher64\\"
+          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=HideHook32 /p:SolutionDir="${{ github.workspace }}\"
+          msbuild Helper32/Helper32.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=Helper32 /p:SolutionDir="${{ github.workspace }}\"
 
       - name: Build x64 Payload (HideHook64)
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetName=HideHook64 /p:SolutionDir="${{ github.workspace }}\" /p:OutDir="${{ github.workspace }}\HookLauncher64\\"
+          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetName=HideHook64 /p:SolutionDir="${{ github.workspace }}\"
 
       - name: Build Standalone HookLauncher64.exe
         run: |
