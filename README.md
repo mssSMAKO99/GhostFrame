@@ -10,11 +10,6 @@
     // UNIVERSAL WINDOW STEALTH UTILITY [x64 + x86] //
 ```
 
-![Platform](https://shields.io)
-![Arch](https://shields.io)
-![Privileges](https://shields.io)
-![Footprint](https://shields.io)
-
 **A lightweight, standalone WinAPI utility that hides target windows from screen capture, taskbar, and `Alt+Tab` without administrator privileges.**
 
 </div>
