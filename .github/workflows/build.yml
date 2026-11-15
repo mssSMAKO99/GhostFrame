@@ -18,22 +18,19 @@ jobs:
 
       - name: Build x86 Payloads (HideHook32 & Helper32)
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=HideHook32
-          msbuild Helper32/Helper32.vcxproj /p:Configuration=Release /p:Platform=Win32
-          copy Release\HideHook32.dll HookLauncher64\
-          copy Release\Helper32.exe HookLauncher64\
+          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=HideHook32 /p:OutDir="${{ github.workspace }}\HookLauncher64\\"
+          msbuild Helper32/Helper32.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=Helper32 /p:OutDir="${{ github.workspace }}\HookLauncher64\\"
 
       - name: Build x64 Payload (HideHook64)
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetName=HideHook64
-          copy x64\Release\HideHook64.dll HookLauncher64\
+          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetName=HideHook64 /p:OutDir="${{ github.workspace }}\HookLauncher64\\"
 
       - name: Build Standalone HookLauncher64.exe
         run: |
-          msbuild HookLauncher64/HookLauncher64.vcxproj /p:Configuration=Release /p:Platform=x64
+          msbuild HookLauncher64/HookLauncher64.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir="${{ github.workspace }}\dist\\"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: GhostFrame-Standalone-x64
-          path: x64/Release/HookLauncher64.exe
+          path: dist/HookLauncher64.exe
