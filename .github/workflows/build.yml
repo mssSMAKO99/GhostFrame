@@ -1,0 +1,39 @@
+name: Build GhostFrame Release
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build x86 Payloads (HideHook32 & Helper32)
+        run: |
+          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=HideHook32
+          msbuild Helper32/Helper32.vcxproj /p:Configuration=Release /p:Platform=Win32
+          copy Release\HideHook32.dll HookLauncher64\
+          copy Release\Helper32.exe HookLauncher64\
+
+      - name: Build x64 Payload (HideHook64)
+        run: |
+          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetName=HideHook64
+          copy x64\Release\HideHook64.dll HookLauncher64\
+
+      - name: Build Standalone HookLauncher64.exe
+        run: |
+          msbuild HookLauncher64/HookLauncher64.vcxproj /p:Configuration=Release /p:Platform=x64
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GhostFrame-Standalone-x64
+          path: x64/Release/HookLauncher64.exe
