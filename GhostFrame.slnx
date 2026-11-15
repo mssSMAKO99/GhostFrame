@@ -3,7 +3,6 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="GhostFrame/GhostFrame.vcxproj" />
   <Project Path="Helper32/Helper32.vcxproj" />
   <Project Path="HideHook/HideHook.vcxproj" />
   <Project Path="HookLauncher64/HookLauncher64.vcxproj" />

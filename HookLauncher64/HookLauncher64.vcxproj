@@ -148,7 +148,6 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="GhostFrame.rc" />
-    <ResourceCompile Include="HookLauncher64.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

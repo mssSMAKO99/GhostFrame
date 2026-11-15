@@ -25,9 +25,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="HookLauncher64.rc">
-      <Filter>Файлы ресурсов</Filter>
-    </ResourceCompile>
     <ResourceCompile Include="GhostFrame.rc">
       <Filter>Файлы ресурсов</Filter>
     </ResourceCompile>
