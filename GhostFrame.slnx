@@ -3,7 +3,7 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="Helper32/Helper32.vcxproj" />
-  <Project Path="HideHook/HideHook.vcxproj" />
-  <Project Path="HookLauncher64/HookLauncher64.vcxproj" />
+  <Project Path="Helper32/Helper32.vcxproj" Id="9d7fae45-cf05-412d-a2fe-b38dd2194c16" />
+  <Project Path="HideHook/HideHook.vcxproj" Id="95c04193-d9f5-47f5-9712-b7083c97ab57" />
+  <Project Path="HookLauncher64/HookLauncher64.vcxproj" Id="e6b28131-77ec-464a-b850-4d4ea3e710a3" />
 </Solution>

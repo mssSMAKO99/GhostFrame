@@ -10,6 +10,7 @@
 **/Debug/
 **/x64/
 **/x86/
+**/TestHookInProcess/
 *.tlog/
 *.log
 *.recipe
