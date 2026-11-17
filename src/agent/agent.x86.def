@@ -1,0 +1,3 @@
+LIBRARY GhostFrameAgent32
+EXPORTS
+    GfAgentHookProc=_GfAgentHookProc@12

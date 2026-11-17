@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared build settings for every GhostFrame project.
+
+  Deliberately does not pin PlatformToolset: build/Toolset.props picks the
+  default toolset of the installed Visual Studio, so the same tree builds with
+  VS 2022 (v143) and VS 2026 (v145).
+-->
+<Project>
+
+  <PropertyGroup Label="GhostFrame.Paths">
+    <GF_RootDir Condition="'$(GF_RootDir)' == ''">$(MSBuildThisFileDirectory)</GF_RootDir>
+
+    <!-- Building a .vcxproj directly leaves SolutionDir empty. -->
+    <GF_SolutionDir Condition="'$(SolutionDir)' != ''">$(SolutionDir)</GF_SolutionDir>
+    <GF_SolutionDir Condition="'$(GF_SolutionDir)' == ''">$(GF_RootDir)</GF_SolutionDir>
+
+    <GF_BuildDir>$(GF_SolutionDir)build\</GF_BuildDir>
+    <!-- Per-configuration on purpose: Debug and Release payloads must never
+         overwrite each other, or a Release launcher can embed a Debug DLL. -->
+    <GF_PayloadDir>$(GF_BuildDir)payload\$(Configuration)\</GF_PayloadDir>
+
+    <OutDir>$(GF_BuildDir)out\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(GF_BuildDir)obj\$(MSBuildProjectName)\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+
+  <PropertyGroup Label="GhostFrame.Build">
+    <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    <LinkIncremental>false</LinkIncremental>
+    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == ''">10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+</Project>
