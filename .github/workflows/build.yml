@@ -1,9 +1,10 @@
-name: Build & Release GhostFrame
+name: Build GhostFrame
 
 on:
   push:
     branches: [ "main" ]
     tags: [ "v*" ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -14,33 +15,50 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
+      - name: Build
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 
-      - name: Build x86 Payloads (HideHook32 & Helper32)
+      - name: Agent harness (deterministic)
+        shell: pwsh
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=HideHook32 /p:SolutionDir="${{ github.workspace }}\"
-          msbuild Helper32/Helper32.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=Helper32 /p:SolutionDir="${{ github.workspace }}\"
+          .\build\out\x64\Release\GfAgentHost.exe (Resolve-Path .\build\payload\Release\GhostFrameAgent64.dll).Path
+          if ($LASTEXITCODE -ne 0) { throw "agent harness failed with $LASTEXITCODE" }
 
-      - name: Build x64 Payload (HideHook64)
+      # Full end-to-end injection test.  Cross-process hooks are blocked on some
+      # hardened CI images, so this step is informative rather than gating.
+      - name: Injection smoke test
+        continue-on-error: true
+        shell: pwsh
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetName=HideHook64 /p:SolutionDir="${{ github.workspace }}\"
+          $target = Start-Process .\build\out\x64\Release\GfTestTarget.exe -PassThru `
+              -RedirectStandardOutput "$env:TEMP\target.out" `
+              -RedirectStandardError "$env:TEMP\target.err"
+          Start-Sleep -Seconds 1
+          $self = Start-Process .\build\out\x64\Release\GhostFrame.exe -ArgumentList '--selftest' `
+              -Wait -PassThru `
+              -RedirectStandardOutput "$env:TEMP\selftest.out" `
+              -RedirectStandardError "$env:TEMP\selftest.err"
+          $code = $self.ExitCode
+          Stop-Process -Id $target.Id -Force -ErrorAction SilentlyContinue
+          if (Test-Path "$env:TEMP\GhostFrame.selftest.log") {
+            Get-Content "$env:TEMP\GhostFrame.selftest.log"
+          }
+          if (Test-Path "$env:TEMP\GhostFrame\ghostframe.log") {
+            Get-Content "$env:TEMP\GhostFrame\ghostframe.log"
+          }
+          exit $code
 
-      - name: Build Standalone HookLauncher64.exe
-        run: |
-          msbuild HookLauncher64/HookLauncher64.vcxproj /p:Configuration=Release /p:Platform=x64 /p:SolutionDir="${{ github.workspace }}\" /p:OutDir="${{ github.workspace }}\dist\\"
-          ren dist\HookLauncher64.exe GhostFrame.exe
-
-      - name: Upload Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
-          name: GhostFrame-Standalone-x64
+          name: GhostFrame-x64
           path: dist/GhostFrame.exe
 
-      - name: Create GitHub Release
+      - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:

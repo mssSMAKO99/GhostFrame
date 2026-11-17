@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{6C1B4E7A-0001-4C55-9E3A-7F0D2B1A0001}</ProjectGuid>
+    <RootNamespace>GhostFrameAgent</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Toolset.props" />
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Compile.props" />
+
+  <PropertyGroup Condition="'$(Platform)'=='x64'">
+    <TargetName>GhostFrameAgent64</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Platform)'=='Win32'">
+    <TargetName>GhostFrameAgent32</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <ModuleDefinitionFile Condition="'$(Platform)'=='x64'">$(MSBuildProjectDirectory)\agent.x64.def</ModuleDefinitionFile>
+      <ModuleDefinitionFile Condition="'$(Platform)'=='Win32'">$(MSBuildProjectDirectory)\agent.x86.def</ModuleDefinitionFile>
+      <AdditionalDependencies>ole32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="agent.cpp" />
+    <ClCompile Include="agent_ipc.cpp" />
+    <ClCompile Include="window_ops.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="agent_ipc.h" />
+    <ClInclude Include="window_ops.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="agent.x64.def" />
+    <None Include="agent.x86.def" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
