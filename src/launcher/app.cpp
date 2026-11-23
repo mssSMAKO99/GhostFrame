@@ -14,8 +14,10 @@
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"GhostFrame.MainWindow";
-constexpr int kMinWidth = 560;
-constexpr int kMinHeight = 440;
+constexpr int kMinWidth = 860;
+constexpr int kMinHeight = 620;
+constexpr int kDefaultWidth = 1080;
+constexpr int kDefaultHeight = 720;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kAttachDoneMessage = WM_APP + 2;
 constexpr UINT kAttachProgressMessage = WM_APP + 3;
@@ -154,8 +156,8 @@ App::InitResult App::Init(HINSTANCE instance, bool noSelfExclude) {
     }
 
     const UINT dpi = ::GetDpiForSystem();
-    const int width = MulDiv(760, dpi, 96);
-    const int height = MulDiv(560, dpi, 96);
+    const int width = MulDiv(kDefaultWidth, dpi, 96);
+    const int height = MulDiv(kDefaultHeight, dpi, 96);
 
     POINT cursor = {};
     ::GetCursorPos(&cursor);
@@ -165,22 +167,39 @@ App::InitResult App::Init(HINSTANCE instance, bool noSelfExclude) {
     ::GetMonitorInfoW(monitor, &monitorInfo);
 
     const RECT& work = monitorInfo.rcWork;
-    int x = work.left + ((work.right - work.left) - width) / 2;
-    int y = work.top + ((work.bottom - work.top) - height) / 2;
+    const int workWidth = work.right - work.left;
+    const int workHeight = work.bottom - work.top;
+    int x = work.left + ((workWidth)-width) / 2;
+    int y = work.top + ((workHeight)-height) / 2;
 
     // Restore the saved geometry when it still fits on a monitor; otherwise fall
     // back to a centred window so a disconnected display cannot hide the app.
-    if (settings_.ui.width >= 400 && settings_.ui.height >= 300) {
+    int windowWidth = width;
+    int windowHeight = height;
+    if (settings_.ui.width >= MulDiv(700, dpi, 96) &&
+        settings_.ui.height >= MulDiv(480, dpi, 96)) {
         RECT saved = {settings_.ui.x, settings_.ui.y, settings_.ui.x + settings_.ui.width,
                       settings_.ui.y + settings_.ui.height};
         const HMONITOR target = ::MonitorFromRect(&saved, MONITOR_DEFAULTTONULL);
         if (target != nullptr) {
             x = settings_.ui.x;
             y = settings_.ui.y;
+            windowWidth = settings_.ui.width;
+            windowHeight = settings_.ui.height;
         }
     }
-    const int windowWidth = settings_.ui.width >= 400 ? settings_.ui.width : width;
-    const int windowHeight = settings_.ui.height >= 300 ? settings_.ui.height : height;
+    // The grid needs room for the sidebar and the table; never open smaller
+    // than the supported minimum, and never larger than the monitor.
+    windowWidth = (std::max)(windowWidth, MulDiv(kMinWidth, dpi, 96));
+    windowHeight = (std::max)(windowHeight, MulDiv(kMinHeight, dpi, 96));
+    windowWidth = (std::min)(windowWidth, workWidth);
+    windowHeight = (std::min)(windowHeight, workHeight);
+    if (windowWidth >= workWidth) {
+        x = work.left;
+    }
+    if (windowHeight >= workHeight) {
+        y = work.top;
+    }
 
     g_app = this;
     hwnd_ = ::CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, kWindowClass, L"GhostFrame",
@@ -278,6 +297,15 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
             auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
             info->ptMinTrackSize.x = theme_.S(kMinWidth);
             info->ptMinTrackSize.y = theme_.S(kMinHeight);
+            // A borderless popup would otherwise maximize over the taskbar.
+            MONITORINFO monitor = {};
+            monitor.cbSize = sizeof(monitor);
+            if (::GetMonitorInfoW(::MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor)) {
+                info->ptMaxPosition.x = monitor.rcWork.left - monitor.rcMonitor.left;
+                info->ptMaxPosition.y = monitor.rcWork.top - monitor.rcMonitor.top;
+                info->ptMaxSize.x = monitor.rcWork.right - monitor.rcWork.left;
+                info->ptMaxSize.y = monitor.rcWork.bottom - monitor.rcWork.top;
+            }
             return 0;
         }
 
@@ -317,7 +345,7 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_CTLCOLOREDIT: {
             HDC dc = reinterpret_cast<HDC>(wParam);
             ::SetTextColor(dc, ui::kText);
-            ::SetBkColor(dc, ui::kPanel);
+            ::SetBkColor(dc, ui::kPanelHi);
             return reinterpret_cast<LRESULT>(editBrush_ != nullptr ? editBrush_
                                                                    : ::GetStockObject(BLACK_BRUSH));
         }
@@ -327,15 +355,17 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
             bool active = false;
             if (SelectedValid() && item->CtlID == ID_BTN_TOGGLE) {
                 active = sessions_.At(static_cast<size_t>(selected_)).hidden();
-            } else if (item->CtlID == ID_BTN_SET_HIDE_ATTACH) {
-                active = settings_.ui.hideOnAttach;
-            } else if (item->CtlID == ID_BTN_SET_TRAY) {
-                active = settings_.ui.minimizeToTray;
-            } else if (item->CtlID == ID_BTN_SET_SELF) {
-                active = !settings_.ui.noSelfExclude;
             }
             const bool hovered = hoveredButton_ != 0 && static_cast<int>(item->CtlID) == hoveredButton_;
-            ui::DrawButton(item, theme_, active, item->CtlID == ID_BTN_CLOSE, hovered);
+            COLORREF surface = ui::kBg;
+            for (int id : {ID_BTN_SET_RESET, ID_BTN_SET_ADD_FG, ID_BTN_SET_BROWSE,
+                           ID_BTN_SET_APPLY}) {
+                if (item->CtlID == static_cast<UINT>(id)) {
+                    surface = ui::kPanel;
+                }
+            }
+            ui::DrawButton(item, theme_, active, item->CtlID == ID_BTN_CLOSE, hovered, false,
+                           surface);
             return TRUE;
         }
 
@@ -355,6 +385,21 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
             }
             OnMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
             return 0;
+        }
+
+        case WM_SETCURSOR: {
+            POINT point = {};
+            ::GetCursorPos(&point);
+            ::ScreenToClient(hwnd_, &point);
+            const bool interactive =
+                ZoneAt(point.x, point.y) != HotZone::None ||
+                TabAt(point.x, point.y) >= 0 || SettingsNavAt(point.x, point.y) >= 0 ||
+                BehaviorSwitchAt(point.x, point.y) >= 0;
+            if (interactive) {
+                ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            break;
         }
 
         case WM_MOUSELEAVE:
@@ -437,7 +482,22 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
                 return HTRIGHT;
             }
             if (point.y < theme_.S(theme_.m.titleHeight)) {
-                return HTCAPTION;
+                // The tab strip and the window buttons are live controls; the
+                // logo and the empty space around them drag the window.
+                bool overControl = false;
+                for (const RECT& tab : layout_.tabs) {
+                    if (::PtInRect(&tab, point)) {
+                        overControl = true;
+                    }
+                }
+                for (const RECT& button : layout_.windowButtons) {
+                    if (::PtInRect(&button, point)) {
+                        overControl = true;
+                    }
+                }
+                if (!overControl) {
+                    return HTCAPTION;
+                }
             }
             return hit;
         }
@@ -499,8 +559,9 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
 }
 
 void App::OnCreate() {
+    ui::InitIcons();
     theme_.Create(::GetDpiForWindow(hwnd_));
-    editBrush_ = ::CreateSolidBrush(ui::kPanel);
+    editBrush_ = ::CreateSolidBrush(ui::kPanelHi);
     CreateChildren();
     Layout();
 
@@ -535,9 +596,9 @@ void App::OnCreate() {
     ScanAutoCapture();
 
     if (settings_.badFile) {
-        SetStatus(L"SETTINGS.JSON WAS CORRUPT — RENAMED TO .BAD, DEFAULTS RESTORED", true);
+        SetStatus(L"settings.json was corrupt — renamed to .bad, defaults restored", true);
     } else {
-        SetStatus(L"READY — PICK A WINDOW ON THE WINDOWS TAB, OR FOCUS ONE AND PRESS CTRL+SHIFT+H");
+        SetStatus(L"Ready — pick a window on the Windows tab, or focus one and press Ctrl+Shift+H");
     }
 }
 
@@ -556,6 +617,7 @@ void App::OnDestroy() {
     UnregisterHotkeys();
     RemoveTray();
     theme_.Destroy();
+    ui::ShutdownIcons();
     if (g_app == this) {
         g_app = nullptr;
     }
@@ -580,25 +642,15 @@ void App::CreateChildren() {
         const wchar_t* tip;
     };
     const ButtonSpec buttons[] = {
-        {ID_BTN_HIDE_UI, L"_", L"Hide the window to the tray"},
-        {ID_BTN_EXIT, L"X", L"Exit GhostFrame and restore every target"},
-        {ID_BTN_TOGGLE, L"TOGGLE STEALTH", L"Toggle capture exclusion for the selection"},
-        {ID_BTN_RESTORE_ALL, L"RESTORE ALL", L"Restore every tracked window"},
-        {ID_BTN_MIN, L"MINIMIZE", L"Minimize the selected targets"},
-        {ID_BTN_RESTORE, L"RESTORE", L"Restore the selected targets"},
-        {ID_BTN_CLOSE, L"CLOSE", L"Ask the selected targets to close"},
-        {ID_BTN_REFRESH, L"REFRESH", L"Refresh the window list (F5)"},
-        {ID_BTN_ATTACH, L"ATTACH SELECTED", L"Attach the selected windows"},
-        {ID_BTN_SET_RESET, L"RESET HOTKEYS", L"Restore the default hotkeys"},
-        {ID_BTN_SET_ADD_FG, L"ADD FOREGROUND APP", L"Auto-capture the current foreground app"},
-        {ID_BTN_SET_BROWSE, L"BROWSE EXE…", L"Pick an executable to auto-capture"},
-        {ID_BTN_SET_ENABLE, L"ENABLE / DISABLE", L"Enable or disable the selected rule"},
-        {ID_BTN_SET_HIDE, L"TOGGLE HIDE", L"Hide the rule's windows on attach"},
-        {ID_BTN_SET_REMOVE, L"REMOVE RULE", L"Remove the selected rule"},
-        {ID_BTN_SET_APPLY, L"APPLY NOW", L"Run the rules against the windows open right now"},
-        {ID_BTN_SET_HIDE_ATTACH, L"HIDE ON ATTACH", L"Hide a target right after attaching it"},
-        {ID_BTN_SET_TRAY, L"MINIMIZE TO TRAY", L"Minimize to the tray instead of closing"},
-        {ID_BTN_SET_SELF, L"EXCLUDE SELF", L"Keep GhostFrame itself out of capture"},
+        {ID_BTN_TOGGLE, L"Toggle stealth", L"Toggle capture exclusion for the selection"},
+        {ID_BTN_RESTORE_ALL, L"Restore all", L"Restore every tracked window"},
+        {ID_BTN_MIN, L"Minimize", L"Minimize the selected targets"},
+        {ID_BTN_RESTORE, L"Restore", L"Restore the selected targets"},
+        {ID_BTN_CLOSE, L"Close", L"Ask the selected targets to close"},
+        {ID_BTN_SET_RESET, L"Reset", L"Restore the default hotkeys"},
+        {ID_BTN_SET_ADD_FG, L"Add app", L"Auto-capture the current foreground app"},
+        {ID_BTN_SET_BROWSE, L"Browse exe…", L"Pick an executable to auto-capture"},
+        {ID_BTN_SET_APPLY, L"Apply now", L"Run the rules against the windows open right now"},
     };
 
     for (const ButtonSpec& spec : buttons) {
@@ -611,13 +663,15 @@ void App::CreateChildren() {
         }
     }
 
-    ::CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_,
+    ::CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_EDIT_SEARCH)), instance_,
                       nullptr);
     if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
-        ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
+        ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.body), TRUE);
         ::SendMessageW(search, EM_SETCUEBANNER, TRUE,
-                       reinterpret_cast<LPARAM>(L"filter by title or process…"));
+                       reinterpret_cast<LPARAM>(L"Search windows, apps or PIDs…"));
+        ::SendMessageW(search, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                       MAKELPARAM(theme_.S(34), theme_.S(10)));
     }
 
     SetupTooltips();
@@ -642,15 +696,11 @@ void App::SetupTooltips() {
         const wchar_t* text;
     };
     const ToolSpec tools[] = {
-        {ID_BTN_HIDE_UI, L"Hide to tray  ·  Ctrl+Shift+M"},
-        {ID_BTN_EXIT, L"Exit GhostFrame"},
         {ID_BTN_TOGGLE, L"Toggle stealth  ·  Ctrl+Shift+H"},
         {ID_BTN_RESTORE_ALL, L"Restore all  ·  Ctrl+Shift+R"},
         {ID_BTN_MIN, L"Minimize target  ·  Ctrl+Shift+Down"},
         {ID_BTN_RESTORE, L"Restore target  ·  Ctrl+Shift+Up"},
         {ID_BTN_CLOSE, L"Close target  ·  Ctrl+Shift+Q"},
-        {ID_BTN_REFRESH, L"Refresh (F5)"},
-        {ID_BTN_ATTACH, L"Attach the selected windows (Enter)"},
     };
 
     for (const ToolSpec& spec : tools) {
@@ -687,60 +737,173 @@ App::LayoutInfo App::ComputeLayout() const {
     ::GetClientRect(hwnd_, &client);
 
     const int width = client.right;
+    const int height = client.bottom;
     const int pad = theme_.S(theme_.m.pad);
+    const int topH = theme_.S(theme_.m.titleHeight);
+    const int sideW = theme_.S(theme_.m.sidebarWidth);
 
-    int cursor = theme_.S(theme_.m.titleHeight);
+    info.topBar = {0, 0, width, topH};
+    info.sidebar = {0, topH, sideW, height};
+    info.content = {sideW, topH, width, height};
 
-    const int tabTop = cursor + theme_.S(6);
+    // Brand mark and the tab strip live in the title bar.
+    const int mark = theme_.S(32);
+    info.logoMark = {theme_.S(22), (topH - mark) / 2, theme_.S(22) + mark,
+                     (topH - mark) / 2 + mark};
+
+    const int tabW = theme_.S(theme_.m.tabWidth);
     const int tabH = theme_.S(theme_.m.tabHeight);
+    const int tabGap = theme_.S(6);
+    const int tabLeft = theme_.S(238);
     for (int i = 0; i < 3; ++i) {
-        const int left = theme_.S(theme_.m.pad) + i * theme_.S(theme_.m.tabStep);
-        info.tabs[i] = {left, tabTop, left + theme_.S(theme_.m.tabWidth), tabTop + tabH};
+        const int left = tabLeft + i * (tabW + tabGap);
+        info.tabs[i] = {left, (topH - tabH) / 2, left + tabW, (topH - tabH) / 2 + tabH};
     }
-    cursor = tabTop + tabH + theme_.S(6);
 
-    const int statusH = theme_.S(theme_.m.statusHeight);
-    info.statusBar = {pad, cursor, width - pad, cursor + statusH};
-    cursor = info.statusBar.bottom + theme_.S(6);
+    const int winW = theme_.S(34);
+    const int winGap = theme_.S(6);
+    int winLeft = width - theme_.S(14) - winW * 3 - winGap * 2;
+    for (int i = 0; i < 3; ++i) {
+        const int left = winLeft + i * (winW + winGap);
+        info.windowButtons[i] = {left, (topH - theme_.S(30)) / 2, left + winW,
+                                 (topH - theme_.S(30)) / 2 + theme_.S(30)};
+    }
 
-    const int headerH = theme_.S(theme_.m.headerHeight);
-    info.header = {pad, cursor, width - pad, cursor + headerH};
-    cursor = info.header.bottom + theme_.S(8);
+    const int cx = sideW + pad;
+    const int cw = width - cx - pad;
+    const int headerTop = topH + theme_.S(22);
+    info.pageHeader = {cx, headerTop, cx + cw, headerTop + theme_.S(64)};
 
-    const int footerH = theme_.S(theme_.m.footerHeight);
-    const int footerTop = client.bottom - pad - footerH;
-    info.footer = {pad, footerTop, width - pad, footerTop + footerH};
-    info.logLink = {width - pad - theme_.S(96), footerTop, width - pad, footerTop + footerH};
-    const int contentBottom = footerTop - theme_.S(8);
+    const int iconSize = theme_.S(44);
+    info.pageIcon = {cx, headerTop + theme_.S(3), cx + iconSize, headerTop + theme_.S(3) + iconSize};
+    info.pageTitle = {info.pageIcon.right + theme_.S(14), headerTop - theme_.S(3),
+                      cx + cw - theme_.S(220), headerTop + theme_.S(30)};
+    info.pageSubtitle = {info.pageTitle.left, headerTop + theme_.S(29),
+                         cx + cw - theme_.S(220), headerTop + theme_.S(54)};
 
-    if (tab_ == Tab::Targets) {
-        const int controlsH = theme_.S(theme_.m.buttonHeight) + theme_.S(8) + theme_.S(28);
-        info.controls = {pad, contentBottom - controlsH, width - pad, contentBottom};
-        info.list = {pad, cursor, width - pad, info.controls.top - theme_.S(10)};
-    } else if (tab_ == Tab::Windows) {
-        info.controls = {};
-        info.list = {pad, cursor, width - pad, contentBottom};
+    const int ctaH = theme_.S(40);
+    const int ctaW = theme_.S(196);
+    if (tab_ != Tab::Settings) {
+        info.cta = {cx + cw - ctaW, headerTop + theme_.S(9), cx + cw,
+                    headerTop + theme_.S(9) + ctaH};
+    }
+    const int secW = theme_.S(124);
+    if (tab_ == Tab::Windows) {
+        info.secondaryCta = {info.cta.left - theme_.S(8) - secW, info.cta.top,
+                             info.cta.left - theme_.S(8), info.cta.bottom};
+    }
+
+    const int footH = theme_.S(18);
+    info.footer = {cx, height - pad - footH, cx + cw, height - pad};
+    info.footerLine = {cx, info.footer.top - theme_.S(12), cx + cw,
+                       info.footer.top - theme_.S(11)};
+    info.logLink = {cx + cw - theme_.S(104), info.footer.top, cx + cw, info.footer.bottom};
+
+    int top = info.pageHeader.bottom + theme_.S(18);
+    const int bottom = info.footer.top - theme_.S(14);
+
+    if (tab_ == Tab::Windows) {
+        info.searchBox = {cx, top, cx + theme_.S(390), top + theme_.S(40)};
+        top = info.searchBox.bottom + theme_.S(12);
+        info.list = {cx, top, cx + cw, bottom};
+    } else if (tab_ == Tab::Targets) {
+        const int toolbarH = theme_.S(36);
+        info.toolbar = {cx, bottom - toolbarH, cx + cw, bottom};
+        info.list = {cx, top, cx + cw, info.toolbar.top - theme_.S(12)};
+
+        // Empty state: the list surface is reused for one large explanatory
+        // card when there is nothing to show.
+        info.emptyCard = info.list;
+        const int cardPad = theme_.S(44);
+        info.emptyArt = {info.emptyCard.left + cardPad, info.emptyCard.top + theme_.S(28),
+                         info.emptyCard.left +
+                             (info.emptyCard.right - info.emptyCard.left) * 45 / 100,
+                         info.emptyCard.bottom - theme_.S(28)};
+        const int blockH = theme_.S(200);
+        const int blockTop =
+            info.emptyCard.top +
+            ((info.emptyCard.bottom - info.emptyCard.top) - blockH) / 2;
+        info.emptyText = {info.emptyArt.right + theme_.S(20), blockTop,
+                          info.emptyCard.right - theme_.S(36), blockTop + theme_.S(108)};
+        info.emptyCta = {info.emptyText.left, blockTop + theme_.S(114),
+                         info.emptyText.left + theme_.S(196), blockTop + theme_.S(152)};
     } else {
-        const int listH = theme_.S(150);
-        info.list = {pad, cursor, width - pad, cursor + listH};
-        int y = info.list.bottom + theme_.S(8);
+        const int navW = theme_.S(theme_.m.settingsNavWidth);
+        info.settingsNav = {cx, top, cx + navW, bottom};
+        for (int i = 0; i < 4; ++i) {
+            const int itemTop = top + theme_.S(10) + i * theme_.S(46);
+            info.settingsNavItems[i] = {info.settingsNav.left + theme_.S(8), itemTop,
+                                        info.settingsNav.right - theme_.S(8),
+                                        itemTop + theme_.S(40)};
+        }
 
-        info.settingsRowA = {pad, y, width - pad, y + theme_.S(28)};
-        y += theme_.S(28) + theme_.S(14);
+        info.settingsArea = {info.settingsNav.right + theme_.S(16), top, cx + cw, bottom};
+        const int gap = theme_.S(12);
 
-        info.rulesHeader = {pad, y, width - pad, y + theme_.S(18)};
-        y += theme_.S(18) + theme_.S(4);
-
-        const int bottomBlock = theme_.S(28) + theme_.S(8) + theme_.S(28) + theme_.S(12) +
-                                theme_.S(30);
-        info.rulesList = {pad, y, width - pad, contentBottom - bottomBlock - theme_.S(8)};
-        y = info.rulesList.bottom + theme_.S(8);
-
-        info.settingsRowB = {pad, y, width - pad, y + theme_.S(28)};
-        y += theme_.S(28) + theme_.S(8);
-        info.settingsRowC = {pad, y, width - pad, y + theme_.S(28)};
-        y += theme_.S(28) + theme_.S(12);
-        info.settingsRowD = {pad, y, width - pad, y + theme_.S(30)};
+        if (settingsSection_ == SettingsSection::General) {
+            const int autoH = theme_.S(76);
+            const int behaviorH = theme_.S(178);
+            const int desiredShortcuts = theme_.S(46) + 3 * theme_.S(34) + theme_.S(12);
+            const int available = bottom - top;
+            int shortcutsH = desiredShortcuts;
+            if (shortcutsH + gap + behaviorH + gap + autoH > available) {
+                shortcutsH = available - behaviorH - autoH - 2 * gap;
+                if (shortcutsH < theme_.S(96)) {
+                    shortcutsH = theme_.S(96);
+                }
+            }
+            info.settingsCard[0] = {info.settingsArea.left, top, info.settingsArea.right,
+                                    top + shortcutsH};
+            info.settingsCard[1] = {info.settingsArea.left,
+                                    info.settingsCard[0].bottom + gap,
+                                    info.settingsArea.right,
+                                    info.settingsCard[0].bottom + gap + behaviorH};
+            info.settingsCard[2] = {info.settingsArea.left,
+                                    info.settingsCard[1].bottom + gap,
+                                    info.settingsArea.right,
+                                    info.settingsCard[1].bottom + gap + autoH};
+            info.settingsHotkeyList = {info.settingsCard[0].left + theme_.S(14),
+                                       info.settingsCard[0].top + theme_.S(46),
+                                       info.settingsCard[0].right - theme_.S(14),
+                                       info.settingsCard[0].bottom - theme_.S(12)};
+            info.settingsManage = {info.settingsCard[2].right - theme_.S(14) - theme_.S(108),
+                                   info.settingsCard[2].top + (autoH - theme_.S(30)) / 2,
+                                   info.settingsCard[2].right - theme_.S(14),
+                                   info.settingsCard[2].top + (autoH + theme_.S(30)) / 2};
+        } else if (settingsSection_ == SettingsSection::Hotkeys) {
+            const int cardH = theme_.S(46) + 6 * theme_.S(34) + theme_.S(46);
+            info.settingsCard[0] = {info.settingsArea.left, top, info.settingsArea.right,
+                                    (std::min)(bottom, top + cardH)};
+            info.settingsHotkeyList = {info.settingsCard[0].left + theme_.S(14),
+                                       info.settingsCard[0].top + theme_.S(46),
+                                       info.settingsCard[0].right - theme_.S(14),
+                                       info.settingsCard[0].bottom - theme_.S(46)};
+        } else if (settingsSection_ == SettingsSection::AutoCapture) {
+            info.settingsCard[0] = {info.settingsArea.left, top, info.settingsArea.right, bottom};
+            info.settingsActionRow = {info.settingsCard[0].left + theme_.S(14),
+                                      info.settingsCard[0].bottom - theme_.S(50),
+                                      info.settingsCard[0].right - theme_.S(14),
+                                      info.settingsCard[0].bottom - theme_.S(14)};
+            info.settingsRuleList = {info.settingsCard[0].left + theme_.S(14),
+                                     info.settingsCard[0].top + theme_.S(46),
+                                     info.settingsCard[0].right - theme_.S(14),
+                                     info.settingsActionRow.top - theme_.S(10)};
+        } else {
+            info.settingsCard[0] = {info.settingsArea.left, top, info.settingsArea.right,
+                                    top + theme_.S(190)};
+            info.settingsCard[1] = {info.settingsArea.left, info.settingsCard[0].bottom + gap,
+                                    info.settingsArea.right,
+                                    (std::min)(bottom, static_cast<int>(info.settingsCard[0].bottom) + gap +
+                                                           theme_.S(152))};
+            info.settingsLogCta = {info.settingsCard[1].left + theme_.S(16),
+                                   info.settingsCard[1].top + theme_.S(82),
+                                   info.settingsCard[1].left + theme_.S(200),
+                                   info.settingsCard[1].top + theme_.S(118)};
+            info.settingsRestoreCta = {info.settingsLogCta.right + theme_.S(10),
+                                       info.settingsLogCta.top,
+                                       info.settingsLogCta.right + theme_.S(10) + theme_.S(160),
+                                       info.settingsLogCta.bottom};
+        }
     }
 
     return info;
@@ -756,65 +919,83 @@ void App::Layout() {
                            rect.bottom - rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
     };
-    auto place = [this, &placeRect](int id, int x, int y, int w, int h) {
-        placeRect(id, RECT{theme_.S(x), theme_.S(y), theme_.S(x + w), theme_.S(y + h)});
-    };
 
-    RECT full = {};
-    ::GetClientRect(hwnd_, &full);
-    const int width = MulDiv(full.right, 96, static_cast<int>(theme_.dpi));
-
-    place(ID_BTN_HIDE_UI, width - 78, 8, 30, 24);
-    place(ID_BTN_EXIT, width - 44, 8, 30, 24);
-
-    // TARGETS controls (shown only while that tab is active).
-    if (tab_ == Tab::Targets) {
-        const int controlWidth = (width - 32 - 16) / 2;
-        const int controlTop = MulDiv(layout_.controls.top, 96, static_cast<int>(theme_.dpi));
-        place(ID_BTN_TOGGLE, 16, controlTop, controlWidth, 30);
-        place(ID_BTN_RESTORE_ALL, 16 + controlWidth + 16, controlTop, controlWidth, 30);
-        const int rowTop = controlTop + 38;
-        const int third = (width - 32 - 2 * 12) / 3;
-        place(ID_BTN_MIN, 16, rowTop, third, 28);
-        place(ID_BTN_RESTORE, 16 + third + 12, rowTop, third, 28);
-        place(ID_BTN_CLOSE, 16 + 2 * (third + 12), rowTop, third, 28);
+    // TARGETS action bar.
+    if (layout_.toolbar.right > layout_.toolbar.left) {
+        const int gap = theme_.S(8);
+        const int count = 5;
+        const int total = layout_.toolbar.right - layout_.toolbar.left;
+        const int buttonWidth = (total - gap * (count - 1)) / count;
+        const int ids[count] = {ID_BTN_TOGGLE, ID_BTN_RESTORE_ALL, ID_BTN_MIN, ID_BTN_RESTORE,
+                                ID_BTN_CLOSE};
+        for (int i = 0; i < count; ++i) {
+            RECT rect = {layout_.toolbar.left + i * (buttonWidth + gap), layout_.toolbar.top,
+                         layout_.toolbar.left + i * (buttonWidth + gap) + buttonWidth,
+                         layout_.toolbar.bottom};
+            placeRect(ids[i], rect);
+        }
     }
 
-    // WINDOWS-tab header actions.
-    const int headerTop = MulDiv(layout_.header.top, 96, static_cast<int>(theme_.dpi));
-    place(ID_BTN_ATTACH, width - 16 - 190, headerTop, 190, 22);
-    place(ID_BTN_REFRESH, width - 16 - 190 - 8 - 90, headerTop, 90, 22);
-    const int tabStep = theme_.m.tabStep;
-    place(ID_EDIT_SEARCH, theme_.m.pad + tabStep * 3 + 20, theme_.m.tabTop,
-          width - (theme_.m.pad + tabStep * 3 + 20) - 16, 24);
-
-    // SETTINGS tab.
-    auto placeRow = [&](int id, const RECT& rect, int slot, int slots) {
-        const int gap = theme_.S(10);
-        const int totalWidth = rect.right - rect.left;
-        const int slotWidth = (totalWidth - (slots - 1) * gap) / slots;
-        RECT r = {rect.left + slot * (slotWidth + gap), rect.top,
-                  rect.left + slot * (slotWidth + gap) + slotWidth, rect.bottom};
-        placeRect(id, r);
-    };
-
-    if (layout_.settingsRowA.right > layout_.settingsRowA.left) {
-        placeRow(ID_BTN_SET_RESET, layout_.settingsRowA, 0, 2);
-        placeRow(ID_BTN_SET_ADD_FG, layout_.settingsRowA, 1, 2);
-        placeRect(ID_BTN_SET_BROWSE, layout_.settingsRowB);
-        placeRow(ID_BTN_SET_ENABLE, layout_.settingsRowC, 0, 4);
-        placeRow(ID_BTN_SET_HIDE, layout_.settingsRowC, 1, 4);
-        placeRow(ID_BTN_SET_REMOVE, layout_.settingsRowC, 2, 4);
-        placeRow(ID_BTN_SET_APPLY, layout_.settingsRowC, 3, 4);
-        placeRow(ID_BTN_SET_HIDE_ATTACH, layout_.settingsRowD, 0, 3);
-        placeRow(ID_BTN_SET_TRAY, layout_.settingsRowD, 1, 3);
-        placeRow(ID_BTN_SET_SELF, layout_.settingsRowD, 2, 3);
+    // Search field inside its painted rounded shell.
+    if (layout_.searchBox.right > layout_.searchBox.left) {
+        RECT edit = {layout_.searchBox.left + theme_.S(34), layout_.searchBox.top + theme_.S(8),
+                     layout_.searchBox.right - theme_.S(8),
+                     layout_.searchBox.bottom - theme_.S(8)};
+        placeRect(ID_EDIT_SEARCH, edit);
+        if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
+            ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.body), TRUE);
+            ::SendMessageW(search, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                           MAKELPARAM(theme_.S(4), theme_.S(10)));
+        }
     }
 
+    // SETTINGS actions.
+    if (tab_ == Tab::Settings && layout_.settingsCard[0].right > layout_.settingsCard[0].left) {
+        if (settingsSection_ == SettingsSection::General ||
+            settingsSection_ == SettingsSection::Hotkeys) {
+            RECT reset = {layout_.settingsCard[0].right - theme_.S(14) - theme_.S(84),
+                          layout_.settingsCard[0].top + theme_.S(11),
+                          layout_.settingsCard[0].right - theme_.S(14),
+                          layout_.settingsCard[0].top + theme_.S(11) + theme_.S(30)};
+            placeRect(ID_BTN_SET_RESET, reset);
+        } else if (settingsSection_ == SettingsSection::AutoCapture) {
+            const RECT row = layout_.settingsActionRow;
+            const int gap = theme_.S(10);
+            const int buttonWidth = (row.right - row.left - 2 * gap) / 3;
+            const int ids[3] = {ID_BTN_SET_ADD_FG, ID_BTN_SET_BROWSE, ID_BTN_SET_APPLY};
+            for (int i = 0; i < 3; ++i) {
+                RECT rect = {row.left + i * (buttonWidth + gap), row.top,
+                             row.left + i * (buttonWidth + gap) + buttonWidth, row.bottom};
+                placeRect(ids[i], rect);
+            }
+        }
+    }
+
+    targetsList_.SetRowHeight(58);
+    targetsList_.SetColumns({});
+    targetsList_.SetCheckboxes(false);
     targetsList_.SetBounds(layout_.list, theme_);
+
+    windowsList_.SetRowHeight(43);
+    windowsList_.SetColumns({
+        {L"WINDOW", -1, DT_LEFT, false},
+        {L"APPLICATION", 128, DT_LEFT, false},
+        {L"PID", 62, DT_RIGHT, true},
+        {L"ARCH", 52, DT_LEFT, true},
+        {L"TYPE", 104, DT_LEFT, false},
+    });
+    windowsList_.SetCheckboxes(true);
     windowsList_.SetBounds(layout_.list, theme_);
-    hotkeysList_.SetBounds(layout_.list, theme_);
-    rulesList_.SetBounds(layout_.rulesList, theme_);
+
+    hotkeysList_.SetRowHeight(34);
+    hotkeysList_.SetColumns({});
+    hotkeysList_.SetCheckboxes(false);
+    hotkeysList_.SetBounds(layout_.settingsHotkeyList, theme_);
+
+    rulesList_.SetRowHeight(43);
+    rulesList_.SetColumns({});
+    rulesList_.SetCheckboxes(false);
+    rulesList_.SetBounds(layout_.settingsRuleList, theme_);
 }
 
 RECT App::TabRect(int index) const {
@@ -863,7 +1044,7 @@ void App::RegisterHotkeys() {
     }
 
     if (!failed.empty()) {
-        SetStatus(L"HOTKEY CONFLICT — ALREADY IN USE: " + failed, true);
+        SetStatus(L"Hotkey conflict — already in use: " + failed, true);
     }
 }
 
@@ -1078,38 +1259,127 @@ void App::OnPaint() {
 void App::PaintInto(HDC dc, const RECT& client) {
     ui::FillSolid(dc, client, ui::kBg);
 
-    const bool focused = ::GetFocus() == hwnd_;
+    PaintTopBar(dc, client);
+    PaintSidebar(dc, client);
+    PaintPageChrome(dc);
 
-    // Title bar.
-    const RECT titleBar = {0, 0, client.right, theme_.S(theme_.m.titleHeight)};
-    ui::FillSolid(dc, titleBar, ui::kPanel);
-    const RECT titleLine = {0, titleBar.bottom - 1, client.right, titleBar.bottom};
-    ui::FillSolid(dc, titleLine, ui::kNeonDim);
+    if (tab_ == Tab::Targets) {
+        PaintTargetsPage(dc);
+    } else if (tab_ == Tab::Windows) {
+        PaintWindowsPage(dc);
+    } else {
+        PaintSettingsPage(dc);
+    }
 
-    RECT titleRect = {theme_.S(theme_.m.pad), 0, client.right - theme_.S(150), titleBar.bottom};
-    ui::DrawLabel(dc, L"// GHOSTFRAME", titleRect, theme_.title, ui::kNeon,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    PaintFooter(dc);
 
-    RECT versionRect = {client.right - theme_.S(140), 0, client.right - theme_.S(84),
-                        titleBar.bottom};
-    ui::DrawLabel(dc, L"v" GF_VERSION_STRING, versionRect, theme_.small, ui::kMuted,
-                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    // Transient toast.
+    if (!toast_.empty() && ::GetTickCount64() < toastUntil_) {
+        const SIZE size = ui::MeasureTextSize(dc, theme_.body, toast_);
+        const int width = size.cx + theme_.S(40);
+        const int height = theme_.S(36);
+        const int left = layout_.content.left + ((layout_.content.right - layout_.content.left) - width) / 2;
+        RECT toast = {left, layout_.topBar.bottom + theme_.S(12), left + width,
+                      layout_.topBar.bottom + theme_.S(12) + height};
+        ui::FillRoundRect(dc, toast, ui::kToastBg, theme_.S(10));
+        ui::StrokeRoundFrame(dc, toast, toastError_ ? ui::kWarn : ui::kNeonDim, theme_.S(10), 1);
+        ui::DrawLabel(dc, toast_.c_str(), toast, theme_.body,
+                      toastError_ ? ui::kWarn : ui::kText,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+}
 
-    // Tabs.
-    static const wchar_t* const kTabNames[] = {L"TARGETS", L"WINDOWS", L"SETTINGS"};
+void App::PaintTopBar(HDC dc, const RECT& client) {
+    ui::FillSolid(dc, layout_.topBar, ui::kTopBar);
+    const RECT border = {0, layout_.topBar.bottom - 1, client.right, layout_.topBar.bottom};
+    ui::FillSolid(dc, border, ui::kBorder);
+
+    const int markSize = theme_.S(30);
+    ui::DrawGhostMark(dc, (layout_.logoMark.left + layout_.logoMark.right) / 2,
+                      (layout_.logoMark.top + layout_.logoMark.bottom) / 2, markSize, ui::kNeon,
+                      ui::kTopBar, false);
+
+    RECT wordmark = {layout_.logoMark.right + theme_.S(10), layout_.topBar.top,
+                     layout_.tabs[0].left - theme_.S(14), layout_.topBar.bottom};
+    ui::DrawLabel(dc, L"GhostFrame", wordmark, theme_.brand, ui::kText,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    static const wchar_t* const kTabNames[] = {L"Targets", L"Windows", L"Settings"};
+    static const ui::Icon kTabIcons[] = {ui::Icon::Target, ui::Icon::Grid, ui::Icon::Gear};
     const int activeTab = tab_ == Tab::Targets ? 0 : (tab_ == Tab::Windows ? 1 : 2);
     for (int index = 0; index < 3; ++index) {
         const bool active = activeTab == index;
+        const bool hovered = hoverTab_ == index;
         const RECT tab = layout_.tabs[index];
-        ui::FillRoundRect(dc, tab, active ? ui::kPanelHi : ui::kPanel, theme_.S(6));
-        ui::StrokeRoundFrame(dc, tab, active ? ui::kNeon : ui::kBorder, theme_.S(6), 1);
-        ui::DrawLabel(dc, kTabNames[index], tab, theme_.small, active ? ui::kNeon : ui::kMuted,
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const COLORREF background =
+            active ? ui::Blend(ui::kPanelHi, ui::kNeonBg, 45)
+                   : (hovered ? ui::kPanelHi : ui::kTopBar);
+        ui::FillRoundRect(dc, tab, background, theme_.S(9));
+        if (active) {
+            ui::StrokeRoundFrame(dc, tab, ui::kNeonDim, theme_.S(9), 1);
+        }
+
+        const SIZE textSize = ui::MeasureTextSize(dc, theme_.small, kTabNames[index]);
+        const int iconSize = theme_.S(15);
+        const int total = iconSize + theme_.S(8) + textSize.cx;
+        const int startX = tab.left + ((tab.right - tab.left) - total) / 2;
+        const int iconY = tab.top + ((tab.bottom - tab.top) - iconSize) / 2;
+        RECT iconRect = {startX, iconY, startX + iconSize, iconY + iconSize};
+        ui::DrawIcon(dc, kTabIcons[index], iconRect,
+                     active ? ui::kNeon : (hovered ? ui::kText : ui::kMuted), theme_.S(2));
+        RECT label = {iconRect.right + theme_.S(8), tab.top, tab.right, tab.bottom};
+        ui::DrawLabel(dc, kTabNames[index], label, theme_.small,
+                      active ? ui::kText : (hovered ? ui::kText : ui::kMuted),
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
-    // Status bar: the transient status on the left, the live summary on the
-    // right.
-    wchar_t summary[96] = {};
+    // Version and window controls.
+    RECT version = {layout_.windowButtons[0].left - theme_.S(108), layout_.topBar.top,
+                    layout_.windowButtons[0].left - theme_.S(18), layout_.topBar.bottom};
+    ui::DrawLabel(dc, L"v" GF_VERSION_STRING, version, theme_.tiny, ui::kTextDim,
+                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    const bool zoomed = ::IsZoomed(hwnd_) != FALSE;
+    for (int i = 0; i < 3; ++i) {
+        const RECT button = layout_.windowButtons[i];
+        const bool hovered = hotZone_ == (i == 0 ? HotZone::Hide
+                                                 : (i == 1 ? HotZone::Maximize : HotZone::Close));
+        if (hovered) {
+            ui::FillRoundRect(dc, button, i == 2 ? ui::kWarnBg : ui::kPanelHi, theme_.S(8));
+        }
+        const int iconSize = theme_.S(15);
+        RECT icon = {button.left + ((button.right - button.left) - iconSize) / 2,
+                     button.top + ((button.bottom - button.top) - iconSize) / 2, 0, 0};
+        icon.right = icon.left + iconSize;
+        icon.bottom = icon.top + iconSize;
+        const ui::Icon glyph = i == 0 ? ui::Icon::Minimize
+                                      : (i == 1 ? (zoomed ? ui::Icon::Restore : ui::Icon::Maximize)
+                                                : ui::Icon::Close);
+        ui::DrawIcon(dc, glyph, icon, i == 2 && hovered ? ui::kWarn : ui::kMuted, theme_.S(2));
+    }
+}
+
+void App::PaintSidebar(HDC dc, const RECT& client) {
+    (void)client;
+    ui::FillSolid(dc, layout_.sidebar, ui::kSidebar);
+    const RECT border = {layout_.sidebar.right - 1, layout_.sidebar.top, layout_.sidebar.right,
+                         layout_.sidebar.bottom};
+    ui::FillSolid(dc, border, ui::kBorder);
+
+    const int centerX = (layout_.sidebar.left + layout_.sidebar.right) / 2;
+    const int ghostCy = layout_.sidebar.top + theme_.S(92);
+    ui::DrawGlow(dc, centerX, ghostCy + theme_.S(10), theme_.S(94), theme_.S(86), ui::kNeon, 11);
+    ui::DrawGhostMark(dc, centerX, ghostCy, theme_.S(104), ui::kNeon, ui::kSidebar, true);
+
+    RECT tagline = {layout_.sidebar.left + theme_.S(32), ghostCy + theme_.S(62),
+                    layout_.sidebar.right - theme_.S(32), ghostCy + theme_.S(110)};
+    ui::DrawLabel(dc, L"Control your windows.\nStay hidden.", tagline, theme_.small, ui::kMuted,
+                  DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+
+    const RECT divider = {layout_.sidebar.left + theme_.S(24), tagline.bottom + theme_.S(10),
+                          layout_.sidebar.right - theme_.S(24), tagline.bottom + theme_.S(11)};
+    ui::FillSolid(dc, divider, ui::kBorder);
+
     int hidden = 0;
     int errored = 0;
     for (size_t i = 0; i < sessions_.Count(); ++i) {
@@ -1121,70 +1391,478 @@ void App::PaintInto(HDC dc, const RECT& client) {
             ++errored;
         }
     }
-    swprintf_s(summary, L"%zu tracked · %d hidden · %d error", sessions_.Count(), hidden, errored);
 
-    const SIZE summarySize = ui::MeasureTextSize(dc, theme_.small, summary);
-    RECT summaryRect = {layout_.statusBar.right - summarySize.cx, layout_.statusBar.top,
-                        layout_.statusBar.right, layout_.statusBar.bottom};
-    ui::DrawLabel(dc, summary, summaryRect, theme_.small, errored > 0 ? ui::kWarn : ui::kMuted,
-                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    struct StatRow {
+        ui::Icon icon;
+        std::wstring text;
+        COLORREF color;
+    };
+    wchar_t trackedText[64] = {};
+    wchar_t hiddenText[64] = {};
+    wchar_t errorText[64] = {};
+    swprintf_s(trackedText, L"%zu tracked", sessions_.Count());
+    swprintf_s(hiddenText, L"%d hidden", hidden);
+    swprintf_s(errorText, L"%d error%s", errored, errored == 1 ? L"" : L"s");
+    const StatRow rows[] = {
+        {ui::Icon::Dot, L"Running", ui::kNeon},
+        {ui::Icon::Monitor, trackedText, ui::kMuted},
+        {ui::Icon::EyeOff, hiddenText, hidden > 0 ? ui::kText : ui::kMuted},
+        {ui::Icon::Warning, errorText, errored > 0 ? ui::kWarn : ui::kTextDim},
+    };
 
-    RECT statusRect = layout_.statusBar;
-    statusRect.right = summaryRect.left - theme_.S(12);
-    ui::DrawLabel(dc, status_.c_str(), statusRect, theme_.body,
-                  statusError_ ? ui::kWarn : ui::kText,
+    int y = divider.bottom + theme_.S(18);
+    for (const StatRow& row : rows) {
+        const int iconSize = theme_.S(16);
+        RECT icon = {layout_.sidebar.left + theme_.S(28), y + theme_.S(2),
+                     layout_.sidebar.left + theme_.S(28) + iconSize,
+                     y + theme_.S(2) + iconSize};
+        ui::DrawIcon(dc, row.icon, icon, row.color, theme_.S(2));
+        RECT text = {icon.right + theme_.S(12), y, layout_.sidebar.right - theme_.S(20),
+                     y + theme_.S(22)};
+        ui::DrawLabel(dc, row.text.c_str(), text, theme_.small, row.color,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        y += theme_.S(30);
+    }
+
+    // Sidebar footer: the method and the build stay visible, like a status plate.
+    RECT method = {layout_.sidebar.left + theme_.S(26), layout_.sidebar.bottom - theme_.S(72),
+                   layout_.sidebar.right - theme_.S(22), layout_.sidebar.bottom - theme_.S(54)};
+    ui::DrawLabel(dc, L"WDA_EXCLUDEFROMCAPTURE", method, theme_.tiny, ui::kTextDim,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    RECT build = {method.left, method.bottom, method.right, layout_.sidebar.bottom - theme_.S(34)};
+    wchar_t buildText[96] = {};
+    swprintf_s(buildText, L"Per-monitor DPI · %u%%", static_cast<unsigned>(theme_.dpi * 100 / 96));
+    ui::DrawLabel(dc, buildText, build, theme_.tiny, ui::kTextDim,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+void App::PaintCta(HDC dc, const RECT& rect, const wchar_t* label, ui::Icon icon,
+                   ui::Icon trailing, bool primary, bool hovered) {
+    if (rect.right <= rect.left) {
+        return;
+    }
+    const int radius = theme_.S(10);
+    COLORREF background = primary ? ui::kNeon : ui::kPanelHi;
+    COLORREF border = primary ? ui::kNeon : ui::kBorderHi;
+    COLORREF text = primary ? ui::kOnAccent : ui::kText;
+    if (hovered) {
+        background = primary ? ui::Blend(ui::kNeon, RGB(255, 255, 255), 14) : ui::kPanelHover;
+        border = primary ? ui::kNeon : ui::kNeonDim;
+    }
+    ui::FillRoundRect(dc, rect, background, radius);
+    ui::StrokeRoundFrame(dc, rect, border, radius, 1);
+
+    const int iconSize = theme_.S(16);
+    int left = rect.left + theme_.S(16);
+    if (icon != ui::Icon::None) {
+        RECT iconRect = {left, rect.top + ((rect.bottom - rect.top) - iconSize) / 2,
+                         left + iconSize, 0};
+        iconRect.bottom = iconRect.top + iconSize;
+        ui::DrawIcon(dc, icon, iconRect, text, theme_.S(2));
+        left = iconRect.right + theme_.S(10);
+    }
+    RECT labelRect = {left, rect.top, rect.right - theme_.S(14), rect.bottom};
+    if (trailing != ui::Icon::None) {
+        labelRect.right -= theme_.S(20);
+    }
+    ui::DrawLabel(dc, label, labelRect, theme_.bodyStrong, text,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (trailing != ui::Icon::None) {
+        RECT arrow = {rect.right - theme_.S(16) - theme_.S(12),
+                      rect.top + ((rect.bottom - rect.top) - theme_.S(12)) / 2,
+                      rect.right - theme_.S(16), 0};
+        arrow.bottom = arrow.top + theme_.S(12);
+        ui::DrawIcon(dc, trailing, arrow, text, theme_.S(2));
+    }
+}
+
+void App::PaintPageChrome(HDC dc) {
+    ui::FillRoundRect(dc, layout_.pageIcon, ui::kNeonBg, theme_.S(12));
+    ui::StrokeRoundFrame(dc, layout_.pageIcon, ui::kNeonSoft, theme_.S(12), 1);
+
+    ui::Icon pageIcon = ui::Icon::Target;
+    const wchar_t* title = L"Tracked Targets";
+    const wchar_t* subtitle = L"Manage the windows GhostFrame monitors and hides.";
+    if (tab_ == Tab::Windows) {
+        pageIcon = ui::Icon::Grid;
+        title = L"Windows";
+        subtitle = L"Pick a window to attach and hide from capture.";
+    } else if (tab_ == Tab::Settings) {
+        pageIcon = ui::Icon::Gear;
+        title = L"Settings";
+        subtitle = L"Tune hotkeys, auto-capture rules and behavior.";
+    }
+
+    const int glyph = theme_.S(22);
+    RECT glyphRect = {layout_.pageIcon.left + (layout_.pageIcon.right - layout_.pageIcon.left - glyph) / 2,
+                      layout_.pageIcon.top + (layout_.pageIcon.bottom - layout_.pageIcon.top - glyph) / 2,
+                      0, 0};
+    glyphRect.right = glyphRect.left + glyph;
+    glyphRect.bottom = glyphRect.top + glyph;
+    ui::DrawIcon(dc, pageIcon, glyphRect, ui::kNeon, theme_.S(2));
+
+    ui::DrawLabel(dc, title, layout_.pageTitle, theme_.display, ui::kText,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    ui::DrawLabel(dc, subtitle, layout_.pageSubtitle, theme_.small, ui::kMuted,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
-    // Per-tab header.
+    if (tab_ == Tab::Settings) {
+        return;
+    }
+
     if (tab_ == Tab::Targets) {
-        ui::DrawLabel(dc, L"TRACKED TARGETS", layout_.header, theme_.small, ui::kMuted,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    } else if (tab_ == Tab::Windows) {
-        wchar_t header[96] = {};
-        swprintf_s(header, L"AVAILABLE WINDOWS — %d", windowsList_.SelectableCount());
-        ui::DrawLabel(dc, header, layout_.header, theme_.small, ui::kMuted,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        PaintCta(dc, layout_.cta, L"Add Target", ui::Icon::Plus, ui::Icon::ChevronRight, true,
+                 hotZone_ == HotZone::Cta);
+        return;
+    }
+
+    wchar_t attachLabel[96] = {};
+    if (attachThread_ != nullptr) {
+        wcscpy_s(attachLabel, L"Stop attaching");
     } else {
-        ui::DrawLabel(dc, L"GLOBAL HOTKEYS — CLICK A ROW TO REBIND", layout_.header, theme_.small,
-                      ui::kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (layout_.rulesHeader.right > layout_.rulesHeader.left) {
-            ui::DrawLabel(dc, L"AUTO-CAPTURE RULES — CAPTURE THESE APPS WHEN THEY APPEAR",
-                          layout_.rulesHeader, theme_.small, ui::kMuted,
-                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const int count = windowsList_.SelectedCount();
+        if (count > 0) {
+            swprintf_s(attachLabel, L"Attach %d window%s", count, count == 1 ? L"" : L"s");
+        } else {
+            wcscpy_s(attachLabel, L"Attach Selected");
         }
     }
+    PaintCta(dc, layout_.secondaryCta, L"Refresh", ui::Icon::Refresh, ui::Icon::None, false,
+             hotZone_ == HotZone::Secondary);
+    const bool canAttach = attachThread_ != nullptr || windowsList_.SelectedCount() > 0;
+    PaintCta(dc, layout_.cta, attachLabel, ui::Icon::Plus, ui::Icon::None, canAttach,
+             hotZone_ == HotZone::Cta);
+}
 
-    if (tab_ == Tab::Targets) {
-        targetsList_.Paint(dc, theme_, focused);
-    } else if (tab_ == Tab::Windows) {
-        windowsList_.Paint(dc, theme_, focused);
-    } else {
-        hotkeysList_.Paint(dc, theme_, focused);
-        rulesList_.Paint(dc, theme_, false);
+void App::PaintTargetsPage(HDC dc) {
+    const bool focused = ::GetFocus() == hwnd_;
+    if (sessions_.Empty()) {
+        PaintEmptyTargets(dc);
+        return;
     }
 
-    // Footer.
-    ui::DrawLabel(dc, L"WDA_EXCLUDEFROMCAPTURE · PER-MONITOR DPI · NO ADMIN REQUIRED",
-                  layout_.footer, theme_.small, ui::kMuted,
+    wchar_t line[96] = {};
+    swprintf_s(line, L"%zu window%s tracked", sessions_.Count(),
+               sessions_.Count() == 1 ? L"" : L"s");
+    RECT caption = {layout_.list.left, layout_.list.top - theme_.S(18), layout_.list.right,
+                    layout_.list.top - theme_.S(3)};
+    ui::DrawLabel(dc, line, caption, theme_.tiny, ui::kTextDim,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    RECT logRect = layout_.logLink;
-    ui::DrawLabel(dc, L"OPEN LOG", logRect, theme_.small, ui::kNeon,
+
+    const int selected = targetsList_.SelectedCount();
+    if (selected > 0) {
+        wchar_t selection[64] = {};
+        swprintf_s(selection, L"%d selected", selected);
+        ui::DrawLabel(dc, selection, caption, theme_.tiny, ui::kNeonDim,
+                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+
+    ui::FillRoundRect(dc, layout_.list, ui::kPanel, theme_.S(14));
+    ui::StrokeRoundFrame(dc, layout_.list, ui::kBorder, theme_.S(14), 1);
+    targetsList_.Paint(dc, theme_, focused);
+}
+
+void App::PaintWindowsPage(HDC dc) {
+    const bool focused = ::GetFocus() == hwnd_;
+
+    ui::FillRoundRect(dc, layout_.searchBox, ui::kPanelHi, theme_.S(10));
+    ui::StrokeRoundFrame(dc, layout_.searchBox, ui::kBorder, theme_.S(10), 1);
+    const int iconSize = theme_.S(16);
+    RECT searchIcon = {layout_.searchBox.left + theme_.S(13),
+                       layout_.searchBox.top + (layout_.searchBox.bottom - layout_.searchBox.top - iconSize) / 2,
+                       0, 0};
+    searchIcon.right = searchIcon.left + iconSize;
+    searchIcon.bottom = searchIcon.top + iconSize;
+    ui::DrawIcon(dc, ui::Icon::Search, searchIcon, ui::kMuted, theme_.S(2));
+
+    ui::FillRoundRect(dc, layout_.list, ui::kPanel, theme_.S(14));
+    ui::StrokeRoundFrame(dc, layout_.list, ui::kBorder, theme_.S(14), 1);
+    windowsList_.Paint(dc, theme_, focused);
+}
+
+void App::PaintEmptyTargets(HDC dc) {
+    const RECT card = layout_.emptyCard;
+    ui::FillRoundGradient(dc, card, ui::Blend(ui::kPanel, ui::kNeonBg, 10), ui::kPanel,
+                          theme_.S(14));
+    ui::StrokeRoundFrame(dc, card, ui::kBorder, theme_.S(14), 1);
+
+    // Illustration: a window frame with the brand mark and a plus badge.
+    const RECT art = layout_.emptyArt;
+    const int artW = art.right - art.left;
+    const int artH = art.bottom - art.top;
+    const int frameW = (std::min)(artW - theme_.S(24), theme_.S(230));
+    const int frameH = (std::min)(artH - theme_.S(16), theme_.S(150));
+    RECT frame = {art.left + (artW - frameW) / 2, art.top + (artH - frameH) / 2,
+                  art.left + (artW - frameW) / 2 + frameW,
+                  art.top + (artH - frameH) / 2 + frameH};
+    ui::DrawGlow(dc, (frame.left + frame.right) / 2, (frame.top + frame.bottom) / 2,
+                 frameW * 3 / 5, frameH * 3 / 5, ui::kNeon, 12);
+    ui::FillRoundRect(dc, frame, ui::kPanel, theme_.S(12));
+    ui::StrokeRoundFrame(dc, frame, ui::kBorderHi, theme_.S(12), 1);
+    const RECT frameBar = {frame.left, frame.top, frame.right, frame.top + theme_.S(26)};
+    ui::FillRoundRect(dc, frameBar, ui::kPanelHi, theme_.S(12));
+    for (int i = 0; i < 3; ++i) {
+        ui::FillCircle(dc, frame.left + theme_.S(16) + i * theme_.S(11),
+                       frame.top + theme_.S(13), theme_.S(3),
+                       i == 0 ? ui::kNeonDim : ui::kBorderHi);
+    }
+    ui::DrawGhostMark(dc, (frame.left + frame.right) / 2,
+                      (frame.top + frame.bottom) / 2 + theme_.S(6), theme_.S(84), ui::kNeon,
+                      ui::kPanel, true);
+
+    const int plus = theme_.S(26);
+    RECT plusRect = {frame.right - plus + theme_.S(4), frame.bottom - plus + theme_.S(3),
+                     frame.right + theme_.S(4), frame.bottom + theme_.S(3)};
+    ui::FillCircle(dc, (plusRect.left + plusRect.right) / 2, (plusRect.top + plusRect.bottom) / 2,
+                   plus / 2 + theme_.S(3), ui::kPanel);
+    ui::FillCircle(dc, (plusRect.left + plusRect.right) / 2, (plusRect.top + plusRect.bottom) / 2,
+                   plus / 2, ui::kNeon);
+    const int plusGlyph = theme_.S(13);
+    RECT plusIcon = {(plusRect.left + plusRect.right - plusGlyph) / 2,
+                     (plusRect.top + plusRect.bottom - plusGlyph) / 2, 0, 0};
+    plusIcon.right = plusIcon.left + plusGlyph;
+    plusIcon.bottom = plusIcon.top + plusGlyph;
+    ui::DrawIcon(dc, ui::Icon::Plus, plusIcon, ui::kOnAccent, theme_.S(2));
+
+    RECT title = {layout_.emptyText.left, layout_.emptyText.top, layout_.emptyText.right,
+                  layout_.emptyText.top + theme_.S(38)};
+    ui::DrawLabel(dc, L"No targets yet", title, theme_.title, ui::kText,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    wchar_t body[320] = {};
+    swprintf_s(body,
+               L"Add a target window to start tracking it, or select one on the Windows tab. "
+               L"GhostFrame keeps it visible to you and invisible to capture.");
+    RECT bodyRect = {layout_.emptyText.left, title.bottom + theme_.S(4),
+                     layout_.emptyText.right, layout_.emptyCta.top - theme_.S(10)};
+    ui::DrawLabel(dc, body, bodyRect, theme_.small, ui::kMuted,
+                  DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+
+    PaintCta(dc, layout_.emptyCta, L"Go to Windows", ui::Icon::Grid, ui::Icon::ChevronRight, false,
+             hotZone_ == HotZone::EmptyCta);
+
+    RECT hint = {layout_.emptyCta.left, layout_.emptyCta.bottom + theme_.S(14),
+                 layout_.emptyText.right, layout_.emptyCta.bottom + theme_.S(34)};
+    ui::DrawLabel(dc, L"or press Ctrl+Shift+H to capture the focused window", hint, theme_.tiny,
+                  ui::kTextDim, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+void App::PaintSettingsCard(HDC dc, const RECT& card, ui::Icon icon, const wchar_t* title,
+                            const wchar_t* subtitle) {
+    ui::FillRoundRect(dc, card, ui::kPanel, theme_.S(14));
+    ui::StrokeRoundFrame(dc, card, ui::kBorder, theme_.S(14), 1);
+
+    const int iconSize = theme_.S(18);
+    RECT iconRect = {card.left + theme_.S(18), card.top + theme_.S(13), 0, 0};
+    iconRect.right = iconRect.left + iconSize;
+    iconRect.bottom = iconRect.top + iconSize;
+    ui::DrawIcon(dc, icon, iconRect, ui::kNeon, theme_.S(2));
+
+    RECT titleRect = {iconRect.right + theme_.S(10), card.top + theme_.S(9),
+                      card.right - theme_.S(14), card.top + theme_.S(28)};
+    ui::DrawLabel(dc, title, titleRect, theme_.title, ui::kText,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    RECT subtitleRect = {titleRect.left, card.top + theme_.S(28), card.right - theme_.S(14),
+                         card.top + theme_.S(44)};
+    ui::DrawLabel(dc, subtitle, subtitleRect, theme_.tiny, ui::kMuted,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    const RECT divider = {card.left + theme_.S(14), card.top + theme_.S(46),
+                          card.right - theme_.S(14), card.top + theme_.S(47)};
+    ui::FillSolid(dc, divider, ui::kBorder);
+}
+
+RECT App::SwitchRowRect(const RECT& card, int index) const {
+    const int rowHeight = theme_.S(44);
+    const int top = card.top + theme_.S(46) + index * rowHeight;
+    return RECT{card.left + theme_.S(14), top, card.right - theme_.S(14), top + rowHeight};
+}
+
+void App::PaintSwitchRow(HDC dc, const RECT& rect, const wchar_t* title, const wchar_t* subtitle,
+                         bool on, bool hovered) {
+    if (hovered) {
+        ui::FillRoundRect(dc, rect, ui::kPanelHi, theme_.S(8));
+    }
+    RECT titleRect = {rect.left + theme_.S(6), rect.top + theme_.S(5), rect.right - theme_.S(70),
+                      rect.top + theme_.S(24)};
+    ui::DrawLabel(dc, title, titleRect, theme_.bodyStrong, ui::kText,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    RECT subtitleRect = {titleRect.left, rect.top + theme_.S(22), titleRect.right,
+                         rect.bottom - theme_.S(3)};
+    ui::DrawLabel(dc, subtitle, subtitleRect, theme_.tiny, ui::kTextDim,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    const int switchW = theme_.S(38);
+    const int switchH = theme_.S(20);
+    RECT sw = {rect.right - theme_.S(10) - switchW,
+               rect.top + ((rect.bottom - rect.top) - switchH) / 2, 0, 0};
+    sw.right = sw.left + switchW;
+    sw.bottom = sw.top + switchH;
+    ui::DrawSwitch(dc, theme_, sw, on);
+
+    const RECT separator = {rect.left + theme_.S(6), rect.bottom - 1, rect.right - theme_.S(6),
+                            rect.bottom};
+    ui::FillSolid(dc, separator, ui::kBorder);
+}
+
+void App::PaintSettingsPage(HDC dc) {
+    // Secondary navigation rail.
+    ui::FillRoundRect(dc, layout_.settingsNav, ui::kPanel, theme_.S(14));
+    ui::StrokeRoundFrame(dc, layout_.settingsNav, ui::kBorder, theme_.S(14), 1);
+
+    static const wchar_t* const kNavNames[] = {L"General", L"Hotkeys", L"Auto-Capture",
+                                               L"Advanced"};
+    static const ui::Icon kNavIcons[] = {ui::Icon::Gear, ui::Icon::Keyboard, ui::Icon::Camera,
+                                         ui::Icon::Layers};
+    const int active = static_cast<int>(settingsSection_);
+    for (int i = 0; i < 4; ++i) {
+        const RECT item = layout_.settingsNavItems[i];
+        const bool isActive = i == active;
+        const bool hovered = hoverNav_ == i;
+        if (isActive) {
+            ui::FillRoundRect(dc, item, ui::Blend(ui::kPanelHi, ui::kNeonBg, 50), theme_.S(9));
+            ui::StrokeRoundFrame(dc, item, ui::kNeonDim, theme_.S(9), 1);
+        } else if (hovered) {
+            ui::FillRoundRect(dc, item, ui::kPanelHi, theme_.S(9));
+        }
+        const int iconSize = theme_.S(16);
+        RECT icon = {item.left + theme_.S(12),
+                     item.top + ((item.bottom - item.top) - iconSize) / 2, 0, 0};
+        icon.right = icon.left + iconSize;
+        icon.bottom = icon.top + iconSize;
+        ui::DrawIcon(dc, kNavIcons[i], icon,
+                     isActive ? ui::kNeon : (hovered ? ui::kText : ui::kMuted), theme_.S(2));
+        RECT label = {icon.right + theme_.S(11), item.top, item.right, item.bottom};
+        ui::DrawLabel(dc, kNavNames[i], label, theme_.bodyStrong,
+                      isActive ? ui::kText : (hovered ? ui::kText : ui::kMuted),
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+
+    const bool settingsFocus = ::GetFocus() == hwnd_;
+    if (settingsSection_ == SettingsSection::General) {
+        PaintSettingsCard(dc, layout_.settingsCard[0], ui::Icon::Keyboard, L"Keyboard Shortcuts",
+                          L"Control GhostFrame from anywhere.");
+        hotkeysList_.Paint(dc, theme_, settingsFocus);
+
+        PaintSettingsCard(dc, layout_.settingsCard[1], ui::Icon::Shield, L"General Behavior",
+                          L"How GhostFrame behaves around your desktop.");
+        PaintSwitchRow(dc, SwitchRowRect(layout_.settingsCard[1], 0), L"Hide on attach",
+                       L"Engage capture exclusion as soon as a target is attached.",
+                       settings_.ui.hideOnAttach, hoverSwitch_ == 0);
+        PaintSwitchRow(dc, SwitchRowRect(layout_.settingsCard[1], 1), L"Minimize to tray",
+                       L"Keep GhostFrame in the notification area instead of the taskbar.",
+                       settings_.ui.minimizeToTray, hoverSwitch_ == 1);
+        PaintSwitchRow(dc, SwitchRowRect(layout_.settingsCard[1], 2), L"Exclude self",
+                       L"GhostFrame stays invisible to capture as well.",
+                       !settings_.ui.noSelfExclude, hoverSwitch_ == 2);
+
+        PaintSettingsCard(dc, layout_.settingsCard[2], ui::Icon::Camera, L"Auto-Capture",
+                          L"Attach matching applications automatically.");
+        wchar_t summary[128] = {};
+        swprintf_s(summary, L"%zu rule%s configured", settings_.autoAttach.size(),
+                   settings_.autoAttach.size() == 1 ? L"" : L"s");
+        RECT summaryRect = {layout_.settingsCard[2].left + theme_.S(18),
+                            layout_.settingsCard[2].top + theme_.S(54),
+                            layout_.settingsManage.left - theme_.S(12),
+                            layout_.settingsCard[2].bottom - theme_.S(8)};
+        ui::DrawLabel(dc, summary, summaryRect, theme_.small, ui::kMuted,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        PaintCta(dc, layout_.settingsManage, L"Manage", ui::Icon::None, ui::Icon::ChevronRight,
+                 false, hotZone_ == HotZone::SettingsManage);
+    } else if (settingsSection_ == SettingsSection::Hotkeys) {
+        PaintSettingsCard(dc, layout_.settingsCard[0], ui::Icon::Keyboard, L"Keyboard Shortcuts",
+                          L"Click a row, then press the new combination. Esc cancels.");
+        hotkeysList_.Paint(dc, theme_, settingsFocus);
+        RECT hint = {layout_.settingsCard[0].left + theme_.S(16),
+                     layout_.settingsCard[0].bottom - theme_.S(34),
+                     layout_.settingsCard[0].right - theme_.S(16),
+                     layout_.settingsCard[0].bottom - theme_.S(12)};
+        ui::DrawLabel(dc, L"At least one of Ctrl, Alt, Shift or Win is required.",
+                      hint, theme_.tiny, ui::kTextDim,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    } else if (settingsSection_ == SettingsSection::AutoCapture) {
+        PaintSettingsCard(dc, layout_.settingsCard[0], ui::Icon::Camera,
+                          L"Auto-Capture Rules",
+                          L"These applications are attached automatically when their windows appear.");
+        rulesList_.Paint(dc, theme_, settingsFocus);
+    } else {
+        PaintSettingsCard(dc, layout_.settingsCard[0], ui::Icon::Shield, L"General Behavior",
+                          L"How GhostFrame behaves around your desktop.");
+        PaintSwitchRow(dc, SwitchRowRect(layout_.settingsCard[0], 0), L"Hide on attach",
+                       L"Engage capture exclusion as soon as a target is attached.",
+                       settings_.ui.hideOnAttach, hoverSwitch_ == 0);
+        PaintSwitchRow(dc, SwitchRowRect(layout_.settingsCard[0], 1), L"Minimize to tray",
+                       L"Keep GhostFrame in the notification area instead of the taskbar.",
+                       settings_.ui.minimizeToTray, hoverSwitch_ == 1);
+        PaintSwitchRow(dc, SwitchRowRect(layout_.settingsCard[0], 2), L"Exclude self",
+                       L"GhostFrame stays invisible to capture as well.",
+                       !settings_.ui.noSelfExclude, hoverSwitch_ == 2);
+
+        PaintSettingsCard(dc, layout_.settingsCard[1], ui::Icon::Layers, L"Maintenance",
+                          L"Diagnostics and last-resort actions.");
+        RECT text = {layout_.settingsCard[1].left + theme_.S(18),
+                     layout_.settingsCard[1].top + theme_.S(54),
+                     layout_.settingsCard[1].right - theme_.S(18),
+                     layout_.settingsLogCta.top - theme_.S(6)};
+        ui::DrawLabel(dc,
+                      L"Settings are stored in %LOCALAPPDATA%\\GhostFrame\\settings.json and "
+                      L"saved automatically.",
+                      text, theme_.tiny, ui::kTextDim,
+                      DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+        PaintCta(dc, layout_.settingsLogCta, L"Open log folder", ui::Icon::Folder,
+                 ui::Icon::ArrowUpRight, false, hotZone_ == HotZone::SettingsLog);
+        PaintCta(dc, layout_.settingsRestoreCta, L"Restore all", ui::Icon::Eye,
+                 ui::Icon::None, false, hotZone_ == HotZone::SettingsRestore);
+    }
+}
+
+void App::PaintFooter(HDC dc) {
+    ui::FillSolid(dc, layout_.footerLine, ui::kBorder);
+
+    const int iconSize = theme_.S(13);
+    RECT info = {layout_.footer.left, layout_.footer.top + (layout_.footer.bottom - layout_.footer.top - iconSize) / 2,
+                 0, 0};
+    info.right = info.left + iconSize;
+    info.bottom = info.top + iconSize;
+    ui::DrawIcon(dc, statusError_ ? ui::Icon::Warning : ui::Icon::Info, info,
+                 statusError_ ? ui::kWarn : ui::kTextDim, theme_.S(2));
+
+    RECT statusRect = {info.right + theme_.S(8), layout_.footer.top, layout_.logLink.left - theme_.S(190),
+                       layout_.footer.bottom};
+    ui::DrawLabel(dc, status_.c_str(), statusRect, theme_.small,
+                  statusError_ ? ui::kWarn : ui::kTextDim,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    int hidden = 0;
+    int errored = 0;
+    for (size_t i = 0; i < sessions_.Count(); ++i) {
+        const gf::Session& session = sessions_.At(i);
+        if (session.hidden()) {
+            ++hidden;
+        }
+        if (session.errored()) {
+            ++errored;
+        }
+    }
+    wchar_t summary[96] = {};
+    swprintf_s(summary, L"%zu tracked · %d hidden · %d errors", sessions_.Count(), hidden, errored);
+    RECT summaryRect = {layout_.logLink.left - theme_.S(190), layout_.footer.top,
+                        layout_.logLink.left - theme_.S(16), layout_.footer.bottom};
+    ui::DrawLabel(dc, summary, summaryRect, theme_.tiny, errored > 0 ? ui::kWarn : ui::kTextDim,
                   DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-    // Transient toast.
-    if (!toast_.empty() && ::GetTickCount64() < toastUntil_) {
-        const SIZE size = ui::MeasureTextSize(dc, theme_.body, toast_);
-        const int width = size.cx + theme_.S(32);
-        const int height = theme_.S(34);
-        const int left = (client.right - width) / 2;
-        RECT toast = {left, titleBar.bottom + theme_.S(10), left + width,
-                      titleBar.bottom + theme_.S(10) + height};
-        ui::FillRoundRect(dc, toast, ui::kToastBg, theme_.S(8));
-        ui::StrokeRoundFrame(dc, toast, toastError_ ? ui::kWarn : ui::kNeon, theme_.S(8), 1);
-        ui::DrawLabel(dc, toast_.c_str(), toast, theme_.body,
-                      toastError_ ? ui::kWarn : ui::kText,
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    }
+    RECT log = layout_.logLink;
+    const int arrow = theme_.S(12);
+    RECT arrowRect = {log.right - arrow, log.top + (log.bottom - log.top - arrow) / 2, 0, 0};
+    arrowRect.right = arrowRect.left + arrow;
+    arrowRect.bottom = arrowRect.top + arrow;
+    ui::DrawIcon(dc, ui::Icon::ArrowUpRight, arrowRect,
+                 hotZone_ == HotZone::Log ? ui::kNeon : ui::kNeonDim, theme_.S(2));
+    RECT logText = {log.left, log.top, arrowRect.left - theme_.S(6), log.bottom};
+    ui::DrawLabel(dc, L"Open log", logText, theme_.tiny,
+                  hotZone_ == HotZone::Log ? ui::kNeon : ui::kNeonDim,
+                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
 void App::OnTimer() {
@@ -1233,7 +1911,7 @@ void App::OnTimer() {
 }
 
 void App::ApplyTabControls() {
-    const bool targets = tab_ == Tab::Targets;
+    const bool targets = tab_ == Tab::Targets && !sessions_.Empty();
     const bool windows = tab_ == Tab::Windows;
     const bool settings = tab_ == Tab::Settings;
 
@@ -1243,21 +1921,18 @@ void App::ApplyTabControls() {
         }
     }
 
-    for (int id : {ID_BTN_REFRESH, ID_BTN_ATTACH}) {
-        if (HWND child = ::GetDlgItem(hwnd_, id)) {
-            ::ShowWindow(child, windows ? SW_SHOW : SW_HIDE);
-        }
-    }
     if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
         ::ShowWindow(search, windows ? SW_SHOW : SW_HIDE);
     }
 
-    const int settingsVisibility = settings ? SW_SHOW : SW_HIDE;
-    for (int id : {ID_BTN_SET_RESET, ID_BTN_SET_ADD_FG, ID_BTN_SET_BROWSE, ID_BTN_SET_ENABLE,
-                   ID_BTN_SET_HIDE, ID_BTN_SET_REMOVE, ID_BTN_SET_APPLY, ID_BTN_SET_HIDE_ATTACH,
-                   ID_BTN_SET_TRAY, ID_BTN_SET_SELF}) {
+    const bool resetVisible =
+        settings && (settingsSection_ == SettingsSection::General ||
+                     settingsSection_ == SettingsSection::Hotkeys);
+    const bool rulesVisible = settings && settingsSection_ == SettingsSection::AutoCapture;
+    for (int id : {ID_BTN_SET_RESET, ID_BTN_SET_ADD_FG, ID_BTN_SET_BROWSE, ID_BTN_SET_APPLY}) {
         if (HWND child = ::GetDlgItem(hwnd_, id)) {
-            ::ShowWindow(child, settingsVisibility);
+            const bool show = id == ID_BTN_SET_RESET ? resetVisible : rulesVisible;
+            ::ShowWindow(child, show ? SW_SHOW : SW_HIDE);
         }
     }
 }
@@ -1273,14 +1948,19 @@ void App::SelectTab(Tab tab) {
     if (tab_ == Tab::Windows) {
         RefreshWindows();
         ::SetTimer(hwnd_, kWindowsTimer, kWindowsRefreshMs, nullptr);
-        SetStatus(L"PICK A WINDOW — DOUBLE-CLICK OR SELECT AND PRESS ATTACH");
+        SetStatus(L"Pick one or more windows, then attach them in one action");
     } else {
         ::KillTimer(hwnd_, kWindowsTimer);
         if (tab_ == Tab::Settings) {
             BuildSettingsRows();
-            SetStatus(L"SETTINGS — CLICK A HOTKEY TO REBIND; ESC CANCELS");
+            SetStatus(L"Settings — click a hotkey to rebind; Esc cancels");
         } else {
             BuildTargetRows();
+            if (sessions_.Empty()) {
+                SetStatus(L"Ready — focus a window and press Ctrl+Shift+H, or add a target");
+            } else {
+                SetStatus(L"Select a target to manage it, or use the actions below");
+            }
         }
     }
 
@@ -1288,6 +1968,17 @@ void App::SelectTab(Tab tab) {
                            : tab_ == Tab::Settings ? L"settings"
                                                    : L"targets";
     MarkSettingsDirty();
+    InvalidateAll();
+}
+
+void App::SetSettingsSection(SettingsSection section) {
+    if (settingsSection_ == section) {
+        return;
+    }
+    settingsSection_ = section;
+    Layout();
+    ApplyTabControls();
+    BuildSettingsRows();
     InvalidateAll();
 }
 
@@ -1299,7 +1990,7 @@ void App::OnSize() {
 void App::OnSettingChange() {
     theme_.Create(::GetDpiForWindow(hwnd_));
     if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
-        ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
+        ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.body), TRUE);
     }
     if (tooltip_ != nullptr) {
         ::SendMessageW(tooltip_, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
@@ -1314,14 +2005,32 @@ void App::OnSettingChange() {
 
 void App::OnMouseMove(int x, int y) {
     bool changed = false;
+
+    const HotZone zone = ZoneAt(x, y);
+    const int tab = TabAt(x, y);
+    const int nav = SettingsNavAt(x, y);
+    const int sw = BehaviorSwitchAt(x, y);
+    if (zone != hotZone_ || tab != hoverTab_ || nav != hoverNav_ || sw != hoverSwitch_) {
+        hotZone_ = zone;
+        hoverTab_ = tab;
+        hoverNav_ = nav;
+        hoverSwitch_ = sw;
+        changed = true;
+    }
+
     if (tab_ == Tab::Windows) {
         changed |= windowsList_.OnMouseMove(x, y, true);
         changed |= targetsList_.ClearHover();
         changed |= hotkeysList_.ClearHover();
         changed |= rulesList_.ClearHover();
     } else if (tab_ == Tab::Settings) {
-        changed |= hotkeysList_.OnMouseMove(x, y, true);
-        changed |= rulesList_.OnMouseMove(x, y, true);
+        if (settingsSection_ == SettingsSection::AutoCapture) {
+            changed |= rulesList_.OnMouseMove(x, y, true);
+            changed |= hotkeysList_.ClearHover();
+        } else {
+            changed |= hotkeysList_.OnMouseMove(x, y, true);
+            changed |= rulesList_.ClearHover();
+        }
         changed |= targetsList_.ClearHover();
         changed |= windowsList_.ClearHover();
     } else {
@@ -1340,7 +2049,13 @@ void App::OnMouseLeave() {
     const bool b = windowsList_.ClearHover();
     const bool c = hotkeysList_.ClearHover();
     const bool d = rulesList_.ClearHover();
-    if (a || b || c || d) {
+    const bool chrome = hotZone_ != HotZone::None || hoverTab_ >= 0 || hoverNav_ >= 0 ||
+                        hoverSwitch_ >= 0;
+    hotZone_ = HotZone::None;
+    hoverTab_ = -1;
+    hoverNav_ = -1;
+    hoverSwitch_ = -1;
+    if (a || b || c || d || chrome) {
         InvalidateAll();
     }
 }
@@ -1352,10 +2067,11 @@ void App::OnMouseWheel(int x, int y, int delta) {
     if (tab_ == Tab::Windows) {
         list = &windowsList_;
     } else if (tab_ == Tab::Settings) {
-        if (hotkeysList_.Contains(point.x, point.y)) {
-            list = &hotkeysList_;
-        } else if (rulesList_.Contains(point.x, point.y)) {
+        if (settingsSection_ == SettingsSection::AutoCapture) {
             list = &rulesList_;
+        } else if (settingsSection_ == SettingsSection::General ||
+                   settingsSection_ == SettingsSection::Hotkeys) {
+            list = &hotkeysList_;
         }
     } else {
         list = &targetsList_;
@@ -1366,30 +2082,171 @@ void App::OnMouseWheel(int x, int y, int delta) {
     }
 }
 
-void App::OnLButtonDown(int x, int y, bool ctrl, bool shift) {
-    // The clickable "open log" affordance in the footer.
-    {
-        POINT point = {x, y};
-        if (::PtInRect(&layout_.logLink, point)) {
-            OpenLogFolder();
-            return;
+int App::TabAt(int x, int y) const {
+    POINT point = {x, y};
+    for (int index = 0; index < layout_.tabCount; ++index) {
+        if (::PtInRect(&layout_.tabs[index], point)) {
+            return index;
         }
     }
+    return -1;
+}
 
-    // Tab switching.
-    for (int index = 0; index < 3; ++index) {
-        const RECT tab = TabRect(index);
-        if (::PtInRect(&tab, POINT{x, y})) {
-            SelectTab(index == 0 ? Tab::Targets : (index == 1 ? Tab::Windows : Tab::Settings));
-            return;
+int App::SettingsNavAt(int x, int y) const {
+    if (tab_ != Tab::Settings) {
+        return -1;
+    }
+    POINT point = {x, y};
+    for (int index = 0; index < 4; ++index) {
+        if (::PtInRect(&layout_.settingsNavItems[index], point)) {
+            return index;
         }
+    }
+    return -1;
+}
+
+int App::BehaviorSwitchAt(int x, int y) const {
+    if (tab_ != Tab::Settings) {
+        return -1;
+    }
+    RECT card = {};
+    if (settingsSection_ == SettingsSection::General) {
+        card = layout_.settingsCard[1];
+    } else if (settingsSection_ == SettingsSection::Advanced) {
+        card = layout_.settingsCard[0];
+    } else {
+        return -1;
+    }
+    POINT point = {x, y};
+    for (int index = 0; index < 3; ++index) {
+        RECT row = SwitchRowRect(card, index);
+        if (::PtInRect(&row, point)) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+App::HotZone App::ZoneAt(int x, int y) const {
+    POINT point = {x, y};
+    for (int i = 0; i < 3; ++i) {
+        if (::PtInRect(&layout_.windowButtons[i], point)) {
+            return i == 0 ? HotZone::Hide : (i == 1 ? HotZone::Maximize : HotZone::Close);
+        }
+    }
+    if (::PtInRect(&layout_.logLink, point)) {
+        return HotZone::Log;
+    }
+    if (layout_.cta.right > layout_.cta.left && ::PtInRect(&layout_.cta, point)) {
+        return HotZone::Cta;
+    }
+    if (layout_.secondaryCta.right > layout_.secondaryCta.left &&
+        ::PtInRect(&layout_.secondaryCta, point)) {
+        return HotZone::Secondary;
+    }
+    if (tab_ == Tab::Targets && sessions_.Empty() && layout_.emptyCta.right > layout_.emptyCta.left &&
+        ::PtInRect(&layout_.emptyCta, point)) {
+        return HotZone::EmptyCta;
+    }
+    if (tab_ == Tab::Settings && settingsSection_ == SettingsSection::General &&
+        layout_.settingsManage.right > layout_.settingsManage.left &&
+        ::PtInRect(&layout_.settingsManage, point)) {
+        return HotZone::SettingsManage;
+    }
+    if (tab_ == Tab::Settings && settingsSection_ == SettingsSection::Advanced) {
+        if (layout_.settingsLogCta.right > layout_.settingsLogCta.left &&
+            ::PtInRect(&layout_.settingsLogCta, point)) {
+            return HotZone::SettingsLog;
+        }
+        if (layout_.settingsRestoreCta.right > layout_.settingsRestoreCta.left &&
+            ::PtInRect(&layout_.settingsRestoreCta, point)) {
+            return HotZone::SettingsRestore;
+        }
+    }
+    return HotZone::None;
+}
+
+void App::ActivateZone(HotZone zone) {
+    switch (zone) {
+        case HotZone::Hide:
+            ShowUi(false);
+            break;
+        case HotZone::Maximize:
+            ::ShowWindow(hwnd_, ::IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
+            break;
+        case HotZone::Close:
+            ::PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+            break;
+        case HotZone::Log:
+            OpenLogFolder();
+            break;
+        case HotZone::Cta:
+            if (tab_ == Tab::Targets) {
+                SelectTab(Tab::Windows);
+                if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
+                    ::SetFocus(search);
+                }
+            } else if (tab_ == Tab::Windows) {
+                OnCommand(ID_BTN_ATTACH);
+            }
+            break;
+        case HotZone::Secondary:
+            OnCommand(ID_BTN_REFRESH);
+            break;
+        case HotZone::EmptyCta:
+            SelectTab(Tab::Windows);
+            break;
+        case HotZone::SettingsManage:
+            SetSettingsSection(SettingsSection::AutoCapture);
+            break;
+        case HotZone::SettingsLog:
+            OpenLogFolder();
+            break;
+        case HotZone::SettingsRestore:
+            RestoreAll();
+            break;
+        case HotZone::None:
+        default:
+            break;
+    }
+}
+
+void App::OnLButtonDown(int x, int y, bool ctrl, bool shift) {
+    const int tab = TabAt(x, y);
+    if (tab >= 0) {
+        SelectTab(tab == 0 ? Tab::Targets : (tab == 1 ? Tab::Windows : Tab::Settings));
+        return;
+    }
+
+    const int nav = SettingsNavAt(x, y);
+    if (nav >= 0) {
+        SetSettingsSection(nav == 0 ? SettingsSection::General
+                                    : (nav == 1 ? SettingsSection::Hotkeys
+                                                : (nav == 2 ? SettingsSection::AutoCapture
+                                                            : SettingsSection::Advanced)));
+        return;
+    }
+
+    const int sw = BehaviorSwitchAt(x, y);
+    if (sw >= 0) {
+        OnCommand(sw == 0 ? ID_BTN_SET_HIDE_ATTACH
+                          : (sw == 1 ? ID_BTN_SET_TRAY : ID_BTN_SET_SELF));
+        return;
+    }
+
+    const HotZone zone = ZoneAt(x, y);
+    if (zone != HotZone::None) {
+        ActivateZone(zone);
+        return;
     }
 
     if (tab_ == Tab::Settings) {
-        if (hotkeysList_.Contains(x, y)) {
-            OnSettingsListAction(hotkeysList_.OnLButtonDown(x, y, ctrl, shift), true);
-        } else if (rulesList_.Contains(x, y)) {
+        if (settingsSection_ == SettingsSection::AutoCapture && rulesList_.Contains(x, y)) {
             OnSettingsListAction(rulesList_.OnLButtonDown(x, y, ctrl, shift), false);
+        } else if ((settingsSection_ == SettingsSection::General ||
+                    settingsSection_ == SettingsSection::Hotkeys) &&
+                   hotkeysList_.Contains(x, y)) {
+            OnSettingsListAction(hotkeysList_.OnLButtonDown(x, y, ctrl, shift), true);
         }
         InvalidateAll();
         return;
@@ -1402,15 +2259,19 @@ void App::OnLButtonDown(int x, int y, bool ctrl, bool shift) {
 
 void App::OnLButtonDblClk(int x, int y) {
     if (tab_ == Tab::Settings) {
-        if (hotkeysList_.Contains(x, y)) {
+        if ((settingsSection_ == SettingsSection::General ||
+             settingsSection_ == SettingsSection::Hotkeys) &&
+            hotkeysList_.Contains(x, y)) {
             OnSettingsListAction(hotkeysList_.OnLButtonDblClk(x, y), true);
-        } else if (rulesList_.Contains(x, y)) {
+        } else if (settingsSection_ == SettingsSection::AutoCapture &&
+                   rulesList_.Contains(x, y)) {
             // Double-click a rule to flip its enabled state.
             const int row = rulesList_.IndexAt(x, y);
-            if (row >= 0 && row < static_cast<int>(settings_.autoAttach.size())) {
-                selectedRule_ = row;
-                settings_.autoAttach[static_cast<size_t>(row)].enabled =
-                    !settings_.autoAttach[static_cast<size_t>(row)].enabled;
+            const int rule = row >= 0 ? static_cast<int>(rulesList_.DataAt(row)) : -1;
+            if (rule >= 0 && rule < static_cast<int>(settings_.autoAttach.size())) {
+                selectedRule_ = rule;
+                settings_.autoAttach[static_cast<size_t>(rule)].enabled =
+                    !settings_.autoAttach[static_cast<size_t>(rule)].enabled;
                 MarkSettingsDirty();
                 BuildSettingsRows();
                 rulesList_.Select(row);
@@ -1431,7 +2292,7 @@ void App::OnKeyDown(int virtualKey) {
             rebinding_ = false;
             rebindAction_ = gf::HotkeyAction::Count;
             BuildSettingsRows();
-            SetStatus(L"HOTKEY REBIND CANCELLED");
+            SetStatus(L"Hotkey rebind cancelled");
             InvalidateAll();
             return;
         }
@@ -1463,7 +2324,7 @@ void App::OnKeyDown(int virtualKey) {
     if (virtualKey == VK_F5) {
         if (tab_ == Tab::Windows) {
             RefreshWindows();
-            SetStatus(L"WINDOW LIST REFRESHED");
+            SetStatus(L"Window list refreshed");
         }
         return;
     }
@@ -1477,7 +2338,9 @@ void App::OnKeyDown(int virtualKey) {
     }
 
     if (virtualKey == VK_LEFT || virtualKey == VK_RIGHT) {
-        SelectTab(virtualKey == VK_LEFT ? Tab::Targets : Tab::Windows);
+        const int current = tab_ == Tab::Targets ? 0 : (tab_ == Tab::Windows ? 1 : 2);
+        const int next = (current + (virtualKey == VK_LEFT ? 2 : 1)) % 3;
+        SelectTab(next == 0 ? Tab::Targets : (next == 1 ? Tab::Windows : Tab::Settings));
         return;
     }
 
@@ -1492,23 +2355,29 @@ void App::OnKeyDown(int virtualKey) {
     }
 
     if (tab_ == Tab::Settings) {
-        if (virtualKey == VK_DELETE && selectedRule_ >= 0 &&
-            selectedRule_ < static_cast<int>(settings_.autoAttach.size())) {
-            settings_.autoAttach.erase(settings_.autoAttach.begin() + selectedRule_);
-            selectedRule_ = -1;
-            MarkSettingsDirty();
-            BuildSettingsRows();
-            SetStatus(L"AUTO-CAPTURE RULE REMOVED");
-            InvalidateAll();
-            return;
-        }
-        ui::ListWidget& list = rulesList_.Selected() >= 0 ? rulesList_ : hotkeysList_;
-        const ui::ListWidget::Action action = list.OnKeyDown(virtualKey);
-        if (&list == &hotkeysList_ &&
-            (action.kind == ui::ListWidget::ActionKind::Activate ||
-             action.kind == ui::ListWidget::ActionKind::Toggle)) {
-            BeginRebind(static_cast<gf::HotkeyAction>(action.index));
-            return;
+        if (settingsSection_ == SettingsSection::AutoCapture) {
+            if (virtualKey == VK_DELETE && selectedRule_ >= 0 &&
+                selectedRule_ < static_cast<int>(settings_.autoAttach.size())) {
+                settings_.autoAttach.erase(settings_.autoAttach.begin() + selectedRule_);
+                selectedRule_ = -1;
+                MarkSettingsDirty();
+                BuildSettingsRows();
+                SetStatus(L"Auto-capture rule removed");
+                InvalidateAll();
+                return;
+            }
+            rulesList_.OnKeyDown(virtualKey);
+        } else if (settingsSection_ == SettingsSection::General ||
+                   settingsSection_ == SettingsSection::Hotkeys) {
+            const ui::ListWidget::Action action = hotkeysList_.OnKeyDown(virtualKey);
+            if (action.kind == ui::ListWidget::ActionKind::Activate ||
+                action.kind == ui::ListWidget::ActionKind::Toggle) {
+                const int index = static_cast<int>(hotkeysList_.DataAt(action.index));
+                if (index >= 0 && index < gf::kHotkeyCount) {
+                    BeginRebind(static_cast<gf::HotkeyAction>(index));
+                    return;
+                }
+            }
         }
         InvalidateAll();
         return;
@@ -1569,6 +2438,8 @@ LRESULT CALLBACK App::ButtonSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
                 self->OnButtonHover(hwnd, false);
             }
             break;
+        case WM_ERASEBKGND:
+            return 1;  // WM_DRAWITEM fills the whole surface
         case WM_SETCURSOR:
             ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
             return TRUE;
@@ -1602,7 +2473,7 @@ void App::OnCommand(int id) {
         case ID_BTN_REFRESH:
             if (tab_ == Tab::Windows) {
                 RefreshWindows();
-                SetStatus(L"WINDOW LIST REFRESHED");
+                SetStatus(L"Window list refreshed");
             }
             break;
         case ID_BTN_ATTACH:
@@ -1798,7 +2669,7 @@ void App::OnTray(LPARAM lParam) {
 void App::OnDpiChanged(UINT dpi, const RECT* suggested) {
     theme_.Create(dpi);
     if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
-        ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
+        ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.body), TRUE);
     }
     if (tooltip_ != nullptr) {
         ::SendMessageW(tooltip_, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
@@ -1818,7 +2689,7 @@ void App::OnDpiChanged(UINT dpi, const RECT* suggested) {
 
 void App::AttachForeground(bool hideAfter) {
     if (attachThread_ != nullptr) {
-        SetStatus(L"ATTACHING… — WAIT FOR THE CURRENT ATTACH TO FINISH", true);
+        SetStatus(L"Attaching… — wait for the current attach to finish", true);
         return;
     }
 
@@ -1828,18 +2699,18 @@ void App::AttachForeground(bool hideAfter) {
             SelectTarget(0);
             ToggleStealth(0);
         } else {
-            SetStatus(L"NO FOREGROUND WINDOW — FOCUS THE WINDOW YOU WANT TO TRACK", true);
+            SetStatus(L"No foreground window — focus the window you want to track", true);
         }
         return;
     }
 
     std::wstring reason;
     if (!gf::ValidateTarget(foreground, reason)) {
-        SetStatus(L"ATTACH FAILED: " + reason, true);
+        SetStatus(L"Attach failed: " + reason, true);
         return;
     }
     if (sessions_.IndexOf(foreground) >= 0) {
-        SetStatus(L"THE WINDOW IS ALREADY TRACKED", true);
+        SetStatus(L"The window is already tracked", true);
         return;
     }
 
@@ -1848,7 +2719,7 @@ void App::AttachForeground(bool hideAfter) {
 
 void App::StartAttachBatch(std::vector<HWND> targets, bool hideAfter) {
     if (attachThread_ != nullptr) {
-        SetStatus(L"ATTACHING… — WAIT FOR THE CURRENT ATTACH TO FINISH", true);
+        SetStatus(L"Attaching… — wait for the current attach to finish", true);
         return;
     }
 
@@ -1872,7 +2743,7 @@ void App::StartAttachBatch(std::vector<HWND> targets, bool hideAfter) {
     }
 
     if (pending.empty()) {
-        SetStatus(L"NOTHING TO ATTACH", true);
+        SetStatus(L"Nothing to attach", true);
         return;
     }
 
@@ -1885,12 +2756,12 @@ void App::StartAttachBatch(std::vector<HWND> targets, bool hideAfter) {
     if (attachThread_ == nullptr) {
         delete job;
         attachTotal_ = 0;
-        SetStatus(L"ATTACH FAILED: cannot start the attach worker", true);
+        SetStatus(L"Attach failed: cannot start the attach worker", true);
         return;
     }
 
     UpdateAttachButton();
-    SetStatus(L"ATTACHING…");
+    SetStatus(L"Attaching…");
     InvalidateAll();
 }
 
@@ -1943,7 +2814,7 @@ void App::OnAttachProgress(WPARAM done, LPARAM target) {
     ::GetWindowTextW(reinterpret_cast<HWND>(target), title, _countof(title) - 1);
 
     wchar_t status[320] = {};
-    swprintf_s(status, L"ATTACHING %zu/%d — %s", static_cast<size_t>(done), attachTotal_,
+    swprintf_s(status, L"Attaching %zu/%d — %s", static_cast<size_t>(done), attachTotal_,
                title[0] != L'\0' ? title : L"(untitled window)");
     SetStatus(status);
 }
@@ -2025,18 +2896,18 @@ void App::OnAttachDone(LPARAM lParam) {
 
     wchar_t status[640] = {};
     if (cancelled) {
-        swprintf_s(status, L"ATTACH CANCELLED — %d ATTACHED", attached);
+        swprintf_s(status, L"Attach cancelled — %d attached", attached);
         SetStatus(status, attached == 0);
     } else if (failed == 0) {
-        swprintf_s(status, L"ATTACHED %d/%d", attached, requested);
+        swprintf_s(status, L"Attached %d/%d", attached, requested);
         SetStatus(status);
     } else {
         std::wstring text;
         wchar_t head[64] = {};
-        swprintf_s(head, L"ATTACHED %d/%d — FAILED: ", attached, requested);
+        swprintf_s(head, L"Attached %d/%d — failed: ", attached, requested);
         text = std::wstring(head) + failedText;
         SetStatus(text, true);
-        ShowToast(L"SOME WINDOWS COULD NOT BE ATTACHED", true);
+        ShowToast(L"Some windows could not be attached", true);
     }
 }
 
@@ -2045,26 +2916,13 @@ void App::CancelAttach() {
         return;
     }
     ::InterlockedExchange(&attachCancel_, 1);
-    SetStatus(L"CANCELLING — FINISHING THE CURRENT TARGET…");
+    SetStatus(L"Cancelling — finishing the current target…");
 }
 
 void App::UpdateAttachButton() {
-    HWND button = ::GetDlgItem(hwnd_, ID_BTN_ATTACH);
-    if (button == nullptr) {
-        return;
-    }
-    wchar_t text[96] = {};
-    if (attachThread_ != nullptr) {
-        wcscpy_s(text, L"STOP");
-    } else {
-        const int selected = windowsList_.SelectedCount();
-        if (selected > 0) {
-            swprintf_s(text, L"ATTACH SELECTED (%d)", selected);
-        } else {
-            wcscpy_s(text, L"ATTACH SELECTED");
-        }
-    }
-    ::SetWindowTextW(button, text);
+    // The attach action is painted into the page header; nothing to update on a
+    // child control, only the painted label.
+    InvalidateAll();
 }
 
 void App::JoinAttachWorker() {
@@ -2106,7 +2964,7 @@ gf::SendOutcome App::SendCommand(int index, gf::Cmd cmd, std::wstring& error) {
         pendingCommand_.cmd = cmd;
         pendingCommand_.nextTry = ::GetTickCount64() + kSendRetryDelayMs;
         pendingCommand_.attempts = 1;
-        SetStatus(L"BUSY — THE TARGET IS NOT RESPONDING, RETRYING…", true);
+        SetStatus(L"Busy — the target is not responding, retrying…", true);
     }
     return outcome;
 }
@@ -2131,19 +2989,19 @@ void App::RetryPendingCommand() {
     if (outcome == gf::SendOutcome::Ok) {
         const gf::Cmd cmd = pendingCommand_.cmd;
         pendingCommand_ = PendingCommand{};
-        SetStatus(cmd == gf::Cmd::Hide ? L"STEALTH ENGAGED — WINDOW EXCLUDED FROM CAPTURE"
-                                       : L"CAPTURE EXCLUSION LIFTED");
+        SetStatus(cmd == gf::Cmd::Hide ? L"Stealth engaged — window excluded from capture"
+                                       : L"Capture exclusion lifted");
         InvalidateAll();
         return;
     }
     if (outcome == gf::SendOutcome::Error) {
         pendingCommand_ = PendingCommand{};
-        SetStatus(L"ERROR: " + error, true);
+        SetStatus(L"Error: " + error, true);
         return;
     }
     if (++pendingCommand_.attempts >= kMaxSendAttempts) {
         pendingCommand_ = PendingCommand{};
-        SetStatus(L"ERROR: THE TARGET DID NOT ACKNOWLEDGE THE COMMAND", true);
+        SetStatus(L"The target did not acknowledge the command", true);
         return;
     }
     pendingCommand_.nextTry = ::GetTickCount64() + kSendRetryDelayMs;
@@ -2214,7 +3072,7 @@ void App::UpdateTray() {
 void App::OpenLogFolder() {
     const std::wstring& dir = gf::LogDirectory();
     if (dir.empty()) {
-        SetStatus(L"THE LOG IS NOT AVAILABLE", true);
+        SetStatus(L"The log is not available", true);
         return;
     }
     ::ShellExecuteW(hwnd_, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);

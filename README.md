@@ -107,7 +107,7 @@ options and the hotkeys:
 ```json
 {
   "version": 1,
-  "ui": { "x": 100, "y": 100, "width": 760, "height": 560,
+  "ui": { "x": 100, "y": 100, "width": 1080, "height": 720,
           "minimizeToTray": true, "noSelfExclude": false,
           "hideOnAttach": true, "lastTab": "targets" },
   "hotkeys": { "toggleSelection": "Ctrl+Shift+H", "restoreAll": "Ctrl+Shift+R",
@@ -127,39 +127,49 @@ or a window title (`match: "title"`, case-insensitive substring). When a matchin
 appears — on startup and for new windows — GhostFrame attaches it and, when `hide` is
 true, excludes it from capture. Windows you removed by hand, or that failed to attach a
 few times, are not captured again until their process recreates them. The `SETTINGS` tab
-manages the rules: `ADD FOREGROUND APP`, `BROWSE EXE…`, enable/disable, hide toggle,
+manages the rules: `ADD APP`, `BROWSE EXE…`, per-rule on/off, hide toggle,
 remove, and `APPLY NOW` to run the rules against the windows that are open right now.
 
 ## User interface
 
-The main window is a borderless, resizable surface with three tabs:
+The main window is a borderless, resizable surface with a graphite-and-emerald design:
+a brand rail on the left, a pill tab strip in the title bar (`TARGETS`, `WINDOWS`,
+`SETTINGS`) and a page header with the primary action. The left rail shows the ghost
+mark, the tagline and a live readout of the tracked / hidden / error counters; the
+footer shows the last message, the live summary and `OPEN LOG`.
 
-- **TARGETS** - one row per tracked window: icon, title, process / PID / architecture and
-  a state badge (`VISIBLE` / `HIDDEN` / `ERROR`), with per-row `HIDE` / `SHOW`, `MIN` and
-  `CLOSE` buttons. Selection is multi-row (`Ctrl`/`Shift`/`Ctrl+A`); the command buttons
-  and hotkeys act on the whole selection.
-- **WINDOWS** - the live window picker described above, with a filter box and `AUTO`,
-  `ADMIN`, `UWP` and `TRACKED` badges.
-- **SETTINGS** - the hotkey list (click a row, press a combination, `Esc` cancels) and the
-  auto-capture rule list, plus the `HIDE ON ATTACH`, `MINIMIZE TO TRAY` and
-  `EXCLUDE SELF` toggles.
+- **TARGETS** - one row per tracked window: icon, title, process / PID / architecture
+  and a state badge (`VISIBLE` / `HIDDEN` / `ERROR`), with per-row `SHOW`/`HIDE`,
+  `MIN` and `CLOSE` commands. Selection is multi-row (`Ctrl`/`Shift`/`Ctrl+A`); the
+  command bar and hotkeys act on the whole selection. With nothing tracked, the page
+  shows a large empty state with a shortcut to the window picker.
+- **WINDOWS** - the live window picker as a table with `WINDOW`, `APPLICATION`, `PID`,
+  `ARCH` and `TYPE` columns, per-row checkboxes and a filter box. `AUTO`, `ADMIN`,
+  `UWP` and `TRACKED` badges are shown in the type column; double-click or the
+  `ATTACH SELECTED (N)` action starts tracking.
+- **SETTINGS** - a secondary rail with four sections: `GENERAL` (three core shortcuts,
+  behavior switches and an auto-capture summary), `HOTKEYS` (every binding, with
+  `RESET`), `AUTO-CAPTURE` (rules with per-rule on/off, hide and remove actions, plus
+  `ADD APP`, `BROWSE EXE…` and `APPLY NOW`) and `ADVANCED` (behavior
+  switches, the settings-file location, `OPEN LOG FOLDER` and `RESTORE ALL`).
 
-The status bar shows the last message on the left and a live `N tracked - M hidden -
-K error` summary on the right; `OPEN LOG` in the footer opens the log folder. Errors also
-surface as a short toast over the window. The tray menu lists every tracked target with
-its own `hide` / `restore` / `close` submenu, plus `Restore all`, `Open log folder` and
-`Exit`.
+The theme is defined once in `ui.{h,cpp}`: colours, fonts, control radii, row heights
+and spacing are tokens scaled from the window DPI, so the pagination stays identical
+on every monitor. Icons and the ghost mark are anti-aliased vector drawings in
+`icons.cpp` (GDI+); there are no bitmaps in the chrome. When Windows high contrast is
+on, the palette falls back to the system colours. Fonts follow the system:
+`Segoe UI Variable` on Windows 11 with a `Segoe UI` fallback, and Consolas only for
+the hotkey / PID text.
 
-The chrome is laid out from the client area and a set of theme metrics (padding, row
-height, corner radius, font sizes) instead of hard-coded coordinates, so it adapts to any
-window size and DPI. Fonts follow the system: `Segoe UI Variable` on Windows 11 with a
-`Segoe UI` fallback, and Consolas only for the hotkey/PID text. When Windows high contrast
-is on, the palette switches to the system colours. On Windows 11 the window uses rounded
-DWM corners. Resize from any edge; the minimum size is enforced with `WM_GETMINMAXINFO`.
+The window is still resizable from every edge (`WM_GETMINMAXINFO` enforces the
+minimum), uses rounded DWM corners on Windows 11 and the maximize button keeps the
+window inside the monitor work area. The status message, toast, counters and the
+selection state update live from the 250 ms refresh timer.
 
 The launcher sources are split by responsibility: `app.cpp` (lifecycle, hotkeys, tray,
-auto-capture, chrome), `targets_view.cpp`, `windows_view.cpp`, `settings_view.cpp` and
-`ui.cpp` (theme tokens, drawing primitives and the reusable list widget).
+auto-capture, chrome), `targets_view.cpp`, `windows_view.cpp`, `settings_view.cpp`,
+`ui.cpp` (theme tokens, drawing primitives and the reusable list widget) and
+`icons.cpp` (the vector icon set).
 
 ## Command line
 
@@ -205,7 +215,7 @@ You can also open `GhostFrame.slnx` in Visual Studio and build the launcher proj
 On Windows 10/11 with PowerShell 5.1 or newer, one line is enough:
 
 ```powershell
-irm https://mssSMAKO99.github.io/GhostFrame/install.ps1 | iex
+irm https://mssSMAKO99.github.io/install.ps1 | iex
 ```
 
 The script downloads the latest release from GitHub Releases, checks its SHA-256,
@@ -250,6 +260,13 @@ DLL and PowerShell is only an installer/launcher on top of the built `GhostFrame
 > the "GitHub Actions" source once in the repository settings; the `pages.yml` workflow
 > deploys it. The binary itself is always on the Releases page, never on Pages
 > (`application/octet-stream` would corrupt it).
+>
+> The short URL `https://mssSMAKO99.github.io/install.ps1` is published to the profile
+> site repository (`mssSMAKO99/mssSMAKO99.github.io`) by
+> `publish-installer.yml`. It needs a repository secret named `GF`: a fine-grained
+> personal access token with **Contents: read and write** on that profile repository.
+> Without the secret the workflow warns and skips; the `/GhostFrame/install.ps1` mirror
+> in this repository keeps working through `pages.yml`.
 
 ## Tests
 
@@ -284,7 +301,7 @@ install.ps1                  one-line installer served by GitHub Pages
 include/ghostframe/          protocol + version, shared by launcher and agent
 src/agent/                   injected DLL (x64 and x86), no CRT dependency beyond system DLLs
 src/helper/                  32-bit one-shot bootstrap executable
-src/launcher/                UI (app.cpp + targets/windows/settings views + ui.cpp),
+src/launcher/                UI (app.cpp + targets/windows/settings views + ui.cpp + icons.cpp),
                              injector, session manager, IPC client, settings, self-test
 tests/target/                window that keeps resetting its affinity
 tests/agent_host/            deterministic in-process harness for the agent

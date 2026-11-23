@@ -24,3 +24,6 @@
 
 # Local logs
 *.log
+
+# Design-agent working notes (kept locally, not part of the product)
+DESIGN_AGENT.md

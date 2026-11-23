@@ -50,10 +50,11 @@ void App::BuildWindowRows() {
         row.selectable = !tracked;
         row.dim = tracked;
 
-        wchar_t meta[160] = {};
-        swprintf_s(meta, L"%s  ·  PID %u  ·  %s", window.processName.c_str(), window.pid,
-                   gf::WindowEnumerator::ArchLabel(window.arch));
-        row.meta = meta;
+        wchar_t pidText[16] = {};
+        swprintf_s(pidText, L"%u", window.pid);
+        row.cells.push_back(window.processName);
+        row.cells.push_back(pidText);
+        row.cells.push_back(gf::WindowEnumerator::ArchLabel(window.arch));
 
         if (tracked) {
             row.badges.push_back({L"TRACKED", ui::kMuted});
@@ -79,8 +80,9 @@ void App::BuildWindowRows() {
         rows.push_back(std::move(row));
     }
 
-    windowsList_.SetEmptyText(filter.empty() ? L"NO WINDOWS FOUND"
-                                             : L"NO WINDOWS MATCH THE FILTER");
+    windowsList_.SetEmptyText(filter.empty()
+                                  ? L"NO VISIBLE WINDOWS — OPEN AN APP AND PRESS F5"
+                                  : L"NO WINDOWS MATCH THIS SEARCH");
     windowsList_.SetRows(std::move(rows));
     UpdateAttachButton();
 }
@@ -102,7 +104,7 @@ void App::AttachSelectedWindow() {
 
     const std::vector<int> selected = windowsList_.SelectedIndices();
     if (selected.empty()) {
-        SetStatus(L"NO WINDOW SELECTED", true);
+        SetStatus(L"No window selected", true);
         return;
     }
 
@@ -127,8 +129,8 @@ void App::AttachSelectedWindow() {
     }
 
     if (targets.empty()) {
-        SetStatus(firstReason.empty() ? L"THE WINDOW IS ALREADY TRACKED"
-                                      : L"ATTACH FAILED: " + firstReason,
+        SetStatus(firstReason.empty() ? L"The window is already tracked"
+                                      : L"Attach failed: " + firstReason,
                   true);
         return;
     }
@@ -162,7 +164,7 @@ void App::AttachProcessWindows(HWND sample) {
     }
 
     if (targets.empty()) {
-        SetStatus(L"NO ATTACHABLE WINDOWS IN THIS PROCESS", true);
+        SetStatus(L"No attachable windows in this process", true);
         return;
     }
     StartAttachBatch(std::move(targets), settings_.ui.hideOnAttach);
@@ -192,7 +194,7 @@ void App::OnRButtonDown(int x, int y) {
         }
     }
     if (count == 0) {
-        SetStatus(L"NO ATTACHABLE WINDOWS IN THIS PROCESS", true);
+        SetStatus(L"No attachable windows in this process", true);
         return;
     }
 

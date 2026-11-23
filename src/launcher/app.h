@@ -31,24 +31,57 @@ public:
 
 private:
     enum class Tab { Targets, Windows, Settings };
+    enum class SettingsSection { General, Hotkeys, AutoCapture, Advanced };
+    enum class HotZone {
+        None,
+        Hide,
+        Maximize,
+        Close,
+        Log,
+        Cta,
+        Secondary,
+        EmptyCta,
+        SettingsManage,
+        SettingsLog,
+        SettingsRestore,
+    };
 
     // Chrome geometry computed once per resize/DPI change and shared by
     // Layout() (child controls) and PaintInto() (everything drawn by hand), so
     // the two can never drift apart.
     struct LayoutInfo {
+        RECT topBar = {};
+        RECT sidebar = {};
+        RECT content = {};
+        RECT logoMark = {};
         RECT tabs[3] = {};
-        RECT statusBar = {};
-        RECT header = {};
+        RECT windowButtons[3] = {};  // hide to tray, maximize, close
+        RECT pageHeader = {};
+        RECT pageIcon = {};
+        RECT pageTitle = {};
+        RECT pageSubtitle = {};
+        RECT cta = {};
+        RECT secondaryCta = {};
+        RECT searchBox = {};
+        RECT toolbar = {};
         RECT list = {};
-        RECT rulesHeader = {};
-        RECT rulesList = {};
         RECT footer = {};
+        RECT footerLine = {};
         RECT logLink = {};
-        RECT controls = {};
-        RECT settingsRowA = {};
-        RECT settingsRowB = {};
-        RECT settingsRowC = {};
-        RECT settingsRowD = {};
+        RECT emptyCard = {};
+        RECT emptyArt = {};
+        RECT emptyText = {};
+        RECT emptyCta = {};
+        RECT settingsNav = {};
+        RECT settingsNavItems[4] = {};
+        RECT settingsArea = {};
+        RECT settingsCard[3] = {};
+        RECT settingsHotkeyList = {};
+        RECT settingsRuleList = {};
+        RECT settingsManage = {};
+        RECT settingsActionRow = {};
+        RECT settingsLogCta = {};
+        RECT settingsRestoreCta = {};
         int tabCount = 3;
     };
 
@@ -86,6 +119,21 @@ private:
     void Layout();
     LayoutInfo ComputeLayout() const;
     void PaintInto(HDC dc, const RECT& client);
+    void PaintTopBar(HDC dc, const RECT& client);
+    void PaintSidebar(HDC dc, const RECT& client);
+    void PaintPageChrome(HDC dc);
+    void PaintTargetsPage(HDC dc);
+    void PaintWindowsPage(HDC dc);
+    void PaintSettingsPage(HDC dc);
+    void PaintFooter(HDC dc);
+    void PaintEmptyTargets(HDC dc);
+    void PaintSettingsCard(HDC dc, const RECT& card, ui::Icon icon, const wchar_t* title,
+                           const wchar_t* subtitle);
+    void PaintSwitchRow(HDC dc, const RECT& rect, const wchar_t* title, const wchar_t* subtitle,
+                        bool on, bool hovered);
+    void PaintCta(HDC dc, const RECT& rect, const wchar_t* label, ui::Icon icon,
+                  ui::Icon trailing, bool primary, bool hovered);
+    RECT SwitchRowRect(const RECT& card, int index) const;
     void CreateChildren();
     void SetupTooltips();
     void RelayTooltip(HWND button, UINT message, WPARAM wParam, LPARAM lParam);
@@ -112,6 +160,7 @@ private:
 
     void BuildSettingsRows();
     void OnSettingsListAction(ui::ListWidget::Action action, bool hotkeyList);
+    void SetSettingsSection(SettingsSection section);
 
     void SelectTab(Tab tab);
     void ApplyTabControls();
@@ -153,6 +202,12 @@ private:
     void ShowError(const std::wstring& text);
     void InvalidateAll() { ::InvalidateRect(hwnd_, nullptr, FALSE); }
 
+    HotZone ZoneAt(int x, int y) const;
+    int TabAt(int x, int y) const;
+    int SettingsNavAt(int x, int y) const;
+    int BehaviorSwitchAt(int x, int y) const;
+    void ActivateZone(HotZone zone);
+
     bool SelectedValid() const {
         return selected_ >= 0 && static_cast<size_t>(selected_) < sessions_.Count();
     }
@@ -178,6 +233,11 @@ private:
     bool tray_ = false;
     int selected_ = -1;
     Tab tab_ = Tab::Targets;
+    SettingsSection settingsSection_ = SettingsSection::General;
+    HotZone hotZone_ = HotZone::None;
+    int hoverTab_ = -1;
+    int hoverNav_ = -1;
+    int hoverSwitch_ = -1;
     bool trackingMouse_ = false;
     HBRUSH editBrush_ = nullptr;
     LayoutInfo layout_;

@@ -55,16 +55,18 @@ void App::BuildTargetRows() {
 
         row.badges.push_back({StateLabel(session), StateColor(session)});
 
-        row.actions.push_back(ui::ListAction{ID_ROW_STEALTH, session.hidden() ? L"SHOW" : L"HIDE",
+        row.actions.push_back(ui::ListAction{ID_ROW_STEALTH, session.hidden() ? L"Show" : L"Hide",
                                              ui::kNeon, session.hidden(), false});
-        row.actions.push_back(ui::ListAction{ID_ROW_MIN, L"MIN", ui::kMuted, false, false});
-        row.actions.push_back(ui::ListAction{ID_ROW_CLOSE, L"CLOSE", ui::kWarn, false, true});
+        row.actions.push_back(ui::ListAction{ID_ROW_MIN, L"Min", ui::kMuted, false, false});
+        row.actions.push_back(ui::ListAction{ID_ROW_CLOSE, L"Close", ui::kWarn, false, true});
 
         rows.push_back(std::move(row));
     }
 
-    targetsList_.SetEmptyText(L"NO TARGETS — PICK A WINDOW ON THE WINDOWS TAB");
+    // The empty state is drawn as a full card by the page renderer.
+    targetsList_.SetEmptyText(L"");
     targetsList_.SetRows(std::move(rows));
+    ApplyTabControls();
 }
 
 void App::ApplyListAction(ui::ListWidget::Action action, bool windowsTab) {
@@ -166,8 +168,8 @@ void App::ToggleStealth(int index) {
     selected_ = index;
     targetsList_.Select(index);
     if (outcome == gf::SendOutcome::Ok) {
-        SetStatus(hide ? L"STEALTH ENGAGED — WINDOW EXCLUDED FROM CAPTURE"
-                       : L"CAPTURE EXCLUSION LIFTED");
+        SetStatus(hide ? L"Stealth engaged — window excluded from capture"
+                       : L"Capture exclusion lifted");
     } else if (outcome == gf::SendOutcome::Error) {
         SetStatus(L"ERROR: " + error, true);
     }
@@ -200,13 +202,13 @@ void App::ToggleSelection() {
     wchar_t status[192] = {};
     if (result.error == 0 && result.timeout == 0) {
         swprintf_s(status,
-                   cmd == gf::Cmd::Hide ? L"STEALTH ENGAGED — %d TARGETS"
-                                        : L"CAPTURE EXCLUSION LIFTED — %d TARGETS",
+                   cmd == gf::Cmd::Hide ? L"Stealth engaged — %d targets"
+                                        : L"Capture exclusion lifted — %d targets",
                    result.ok);
         SetStatus(status);
     } else {
-        swprintf_s(status, L"%d/%zu %s — %d BUSY, %d FAILED", result.ok, indices.size(),
-                   cmd == gf::Cmd::Hide ? L"HIDDEN" : L"RESTORED", result.timeout, result.error);
+        swprintf_s(status, L"%d/%zu %s — %d busy, %d failed", result.ok, indices.size(),
+                   cmd == gf::Cmd::Hide ? L"hidden" : L"restored", result.timeout, result.error);
         SetStatus(status, true);
     }
     InvalidateAll();
@@ -217,7 +219,7 @@ void App::RestoreAll() {
     sessions_.RestoreAll();
     selected_ = -1;
     BuildTargetRows();
-    SetStatus(L"ALL TARGETS RESTORED");
+    SetStatus(L"All targets restored");
     UpdateTray();
     InvalidateAll();
 }
@@ -225,7 +227,7 @@ void App::RestoreAll() {
 void App::TargetShow(int command) {
     const std::vector<size_t> indices = SelectedTargetIndices();
     if (indices.empty()) {
-        SetStatus(L"NO TARGET SELECTED", true);
+        SetStatus(L"No target selected", true);
         return;
     }
 
@@ -239,15 +241,15 @@ void App::TargetShow(int command) {
     }
 
     if (applied == 0) {
-        SetStatus(L"THE TARGET WINDOW IS GONE", true);
+        SetStatus(L"The target window is gone", true);
         return;
     }
     const bool minimize = command == SW_MINIMIZE;
     if (applied == 1) {
-        SetStatus(minimize ? L"TARGET MINIMIZED" : L"TARGET RESTORED");
+        SetStatus(minimize ? L"Target minimized" : L"Target restored");
     } else {
         wchar_t status[96] = {};
-        swprintf_s(status, minimize ? L"%d TARGETS MINIMIZED" : L"%d TARGETS RESTORED", applied);
+        swprintf_s(status, minimize ? L"%d targets minimized" : L"%d targets restored", applied);
         SetStatus(status);
     }
 }
@@ -255,7 +257,7 @@ void App::TargetShow(int command) {
 void App::TargetClose() {
     const std::vector<size_t> indices = SelectedTargetIndices();
     if (indices.empty()) {
-        SetStatus(L"NO TARGET SELECTED", true);
+        SetStatus(L"No target selected", true);
         return;
     }
 
@@ -266,14 +268,14 @@ void App::TargetClose() {
         }
     }
     RemoveSelected();
-    SetStatus(indices.size() > 1 ? L"CLOSE SIGNAL SENT TO SELECTED TARGETS"
-                                 : L"CLOSE SIGNAL SENT");
+    SetStatus(indices.size() > 1 ? L"Close signal sent to the selected targets"
+                                 : L"Close signal sent");
 }
 
 void App::RemoveSelected() {
     std::vector<size_t> indices = SelectedTargetIndices();
     if (indices.empty()) {
-        SetStatus(L"NO TARGET SELECTED", true);
+        SetStatus(L"No target selected", true);
         return;
     }
 
