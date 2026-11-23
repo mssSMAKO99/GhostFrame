@@ -225,7 +225,7 @@ it. It never asks for administrator rights and never needs `-ExecutionPolicy Byp
 To verify before running anything, download `install.ps1`, read it and pass options:
 
 ```powershell
-.\install.ps1 -Version v2.1.0        # pin a release instead of latest
+.\install.ps1 -Version 2.1.0.0      # pin a release instead of latest
 .\install.ps1 -NoRun                 # install without starting it
 .\install.ps1 -InstallDir C:\Tools\GhostFrame
 .\install.ps1 -Uninstall             # stop it, remove program, shortcut and data
