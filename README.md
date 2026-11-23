@@ -130,6 +130,37 @@ few times, are not captured again until their process recreates them. The `SETTI
 manages the rules: `ADD FOREGROUND APP`, `BROWSE EXE…`, enable/disable, hide toggle,
 remove, and `APPLY NOW` to run the rules against the windows that are open right now.
 
+## User interface
+
+The main window is a borderless, resizable surface with three tabs:
+
+- **TARGETS** - one row per tracked window: icon, title, process / PID / architecture and
+  a state badge (`VISIBLE` / `HIDDEN` / `ERROR`), with per-row `HIDE` / `SHOW`, `MIN` and
+  `CLOSE` buttons. Selection is multi-row (`Ctrl`/`Shift`/`Ctrl+A`); the command buttons
+  and hotkeys act on the whole selection.
+- **WINDOWS** - the live window picker described above, with a filter box and `AUTO`,
+  `ADMIN`, `UWP` and `TRACKED` badges.
+- **SETTINGS** - the hotkey list (click a row, press a combination, `Esc` cancels) and the
+  auto-capture rule list, plus the `HIDE ON ATTACH`, `MINIMIZE TO TRAY` and
+  `EXCLUDE SELF` toggles.
+
+The status bar shows the last message on the left and a live `N tracked - M hidden -
+K error` summary on the right; `OPEN LOG` in the footer opens the log folder. Errors also
+surface as a short toast over the window. The tray menu lists every tracked target with
+its own `hide` / `restore` / `close` submenu, plus `Restore all`, `Open log folder` and
+`Exit`.
+
+The chrome is laid out from the client area and a set of theme metrics (padding, row
+height, corner radius, font sizes) instead of hard-coded coordinates, so it adapts to any
+window size and DPI. Fonts follow the system: `Segoe UI Variable` on Windows 11 with a
+`Segoe UI` fallback, and Consolas only for the hotkey/PID text. When Windows high contrast
+is on, the palette switches to the system colours. On Windows 11 the window uses rounded
+DWM corners. Resize from any edge; the minimum size is enforced with `WM_GETMINMAXINFO`.
+
+The launcher sources are split by responsibility: `app.cpp` (lifecycle, hotkeys, tray,
+auto-capture, chrome), `targets_view.cpp`, `windows_view.cpp`, `settings_view.cpp` and
+`ui.cpp` (theme tokens, drawing primitives and the reusable list widget).
+
 ## Command line
 
 | Flag | Meaning |
@@ -184,7 +215,8 @@ msbuild/                     shared compiler/toolset props
 include/ghostframe/          protocol + version, shared by launcher and agent
 src/agent/                   injected DLL (x64 and x86), no CRT dependency beyond system DLLs
 src/helper/                  32-bit one-shot bootstrap executable
-src/launcher/                UI, injector, session manager, IPC client, self-test
+src/launcher/                UI (app.cpp + targets/windows/settings views + ui.cpp),
+                             injector, session manager, IPC client, settings, self-test
 tests/target/                window that keeps resetting its affinity
 tests/agent_host/            deterministic in-process harness for the agent
 tests/settings_host/         harness for settings, hotkeys and auto-capture matching

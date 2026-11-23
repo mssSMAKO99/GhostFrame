@@ -32,19 +32,43 @@ public:
 private:
     enum class Tab { Targets, Windows, Settings };
 
+    // Chrome geometry computed once per resize/DPI change and shared by
+    // Layout() (child controls) and PaintInto() (everything drawn by hand), so
+    // the two can never drift apart.
+    struct LayoutInfo {
+        RECT tabs[3] = {};
+        RECT statusBar = {};
+        RECT header = {};
+        RECT list = {};
+        RECT rulesHeader = {};
+        RECT rulesList = {};
+        RECT footer = {};
+        RECT logLink = {};
+        RECT controls = {};
+        RECT settingsRowA = {};
+        RECT settingsRowB = {};
+        RECT settingsRowC = {};
+        RECT settingsRowD = {};
+        int tabCount = 3;
+    };
+
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static DWORD WINAPI AttachThreadProc(LPVOID param);
+    static LRESULT CALLBACK ButtonSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam,
+                                               UINT_PTR id, DWORD_PTR ref);
     LRESULT Handle(UINT message, WPARAM wParam, LPARAM lParam);
 
     void OnCreate();
     void OnDestroy();
     void OnClose();
     void OnPaint();
+    void OnSize();
     void OnTimer();
     void OnCommand(int id);
     void OnHotkey(int id);
     void OnTray(LPARAM lParam);
     void OnDpiChanged(UINT dpi, const RECT* suggested);
+    void OnSettingChange();
     void OnAttachDone(LPARAM lParam);
     void OnAttachProgress(WPARAM done, LPARAM target);
     void OnAutoCaptureMessage(HWND hwnd);
@@ -57,10 +81,14 @@ private:
     void OnKeyDown(int virtualKey);
     void OnVScroll(int code, int position);
     void OnFilterChanged();
+    void OnButtonHover(HWND button, bool hovered);
 
     void Layout();
+    LayoutInfo ComputeLayout() const;
     void PaintInto(HDC dc, const RECT& client);
     void CreateChildren();
+    void SetupTooltips();
+    void RelayTooltip(HWND button, UINT message, WPARAM wParam, LPARAM lParam);
     void RegisterHotkeys();
     void UnregisterHotkeys();
 
@@ -84,8 +112,6 @@ private:
 
     void BuildSettingsRows();
     void OnSettingsListAction(ui::ListWidget::Action action, bool hotkeyList);
-    RECT HotkeysListRect() const;
-    RECT RulesListRect() const;
 
     void SelectTab(Tab tab);
     void ApplyTabControls();
@@ -93,10 +119,10 @@ private:
     void BuildTargetRows();
     void BuildWindowRows();
     void ApplyListAction(ui::ListWidget::Action action, bool windowsTab);
+    void ApplyRowAction(int row, int actionId);
     void AttachSelectedWindow();
     void AttachProcessWindows(HWND sample);
     RECT TabRect(int index) const;
-    RECT ListRect() const;
 
     void SelectTarget(int index);
     void SetSelected(int index);
@@ -120,8 +146,10 @@ private:
     void AddTray();
     void RemoveTray();
     void UpdateTray();
+    void OpenLogFolder();
 
     void SetStatus(std::wstring text, bool error = false);
+    void ShowToast(std::wstring text, bool error);
     void ShowError(const std::wstring& text);
     void InvalidateAll() { ::InvalidateRect(hwnd_, nullptr, FALSE); }
 
@@ -152,6 +180,15 @@ private:
     Tab tab_ = Tab::Targets;
     bool trackingMouse_ = false;
     HBRUSH editBrush_ = nullptr;
+    LayoutInfo layout_;
+    HWND tooltip_ = nullptr;
+    int hoveredButton_ = 0;
+
+    // Transient message drawn over the window for a few seconds (errors and
+    // notable events), independent of the persistent status bar.
+    std::wstring toast_;
+    bool toastError_ = false;
+    ULONGLONG toastUntil_ = 0;
 
     // Background attach: the UI thread never runs the injection itself.  A batch
     // job walks its target list on the worker thread, reports progress and posts

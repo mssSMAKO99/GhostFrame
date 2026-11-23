@@ -10,6 +10,7 @@ namespace {
 constexpr unsigned long long kRotateBytes = 512ull * 1024ull;
 
 std::wstring g_logPath;
+std::wstring g_logDir;
 
 void WriteRaw(const wchar_t* text, int length) {
     if (g_logPath.empty() || length <= 0) {
@@ -75,6 +76,7 @@ std::wstring Win32Message(DWORD error) {
 void LogInit(const std::wstring& directory) {
     ::CreateDirectoryW(directory.c_str(), nullptr);
     g_logPath = directory + L"\\ghostframe.log";
+    g_logDir = directory;
 
     WIN32_FILE_ATTRIBUTE_DATA data = {};
     if (::GetFileAttributesExW(g_logPath.c_str(), GetFileExInfoStandard, &data)) {
@@ -91,7 +93,10 @@ void LogInit(const std::wstring& directory) {
 
 void LogShutdown() {
     g_logPath.clear();
+    g_logDir.clear();
 }
+
+const std::wstring& LogDirectory() { return g_logDir; }
 
 void LogLine(const wchar_t* format, ...) {
     if (g_logPath.empty()) {

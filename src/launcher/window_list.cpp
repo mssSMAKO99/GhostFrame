@@ -141,6 +141,18 @@ HICON WindowEnumerator::IconForWindow(HWND hwnd) {
     return CacheIcon(IconKey(path, hwnd), path, hwnd);
 }
 
+std::wstring WindowEnumerator::ProcessNameForWindow(HWND hwnd) {
+    if (hwnd == nullptr || !::IsWindow(hwnd)) {
+        return std::wstring();
+    }
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) {
+        return std::wstring();
+    }
+    return FileNameOf(ProcessPath(pid));
+}
+
 BOOL CALLBACK WindowEnumerator::EnumProc(HWND hwnd, LPARAM param) {
     auto* context = reinterpret_cast<EnumContext*>(param);
 

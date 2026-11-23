@@ -1,11 +1,11 @@
 #include "app.h"
 
+#include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
-#include <cwctype>
 
 #include "ghostframe/version.h"
 #include "log.h"
@@ -14,18 +14,8 @@
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"GhostFrame.MainWindow";
-constexpr int kBaseWidth = 760;
-constexpr int kBaseHeight = 560;
-constexpr int kTitleHeight = 36;
-constexpr int kTabsLeft = 16;
-constexpr int kTabsTop = 42;
-constexpr int kTabWidth = 118;
-constexpr int kTabStep = 124;
-constexpr int kTabHeight = 26;
-constexpr int kStatusTop = 74;
-constexpr int kHeaderTop = 98;
-constexpr int kListTop = 122;
-constexpr int kListBottom = 400;
+constexpr int kMinWidth = 560;
+constexpr int kMinHeight = 440;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kAttachDoneMessage = WM_APP + 2;
 constexpr UINT kAttachProgressMessage = WM_APP + 3;
@@ -39,6 +29,7 @@ constexpr int kMaxSendAttempts = 6;
 constexpr DWORD kSendRetryDelayMs = 500;
 constexpr DWORD kAttachJoinTimeoutMs = 10000;
 constexpr DWORD kSettingsSaveDelayMs = 500;
+constexpr ULONGLONG kToastDurationMs = 3500;
 
 // SetWinEventHook has no user-data argument, so the single App instance
 // registers itself here for the callback.
@@ -72,35 +63,21 @@ struct AttachJob {
     bool hideAfter = false;
 };
 
-const wchar_t* StateLabel(const gf::Session& session) {
-    if (session.errored()) {
-        return L"ERROR";
+// DWMWA_WINDOW_CORNER_PREFERENCE / DWMWCP_ROUND; loaded dynamically so the exe
+// still starts on Windows 10, where dwmapi.dll has neither.
+void ApplyRoundedCorners(HWND hwnd) {
+    using SetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    HMODULE dwm = ::LoadLibraryW(L"dwmapi.dll");
+    if (dwm == nullptr) {
+        return;
     }
-    if (session.hidden()) {
-        return L"HIDDEN";
+    auto setAttribute = reinterpret_cast<SetWindowAttributeFn>(
+        ::GetProcAddress(dwm, "DwmSetWindowAttribute"));
+    if (setAttribute != nullptr) {
+        const DWORD corner = 2;  // DWMWCP_ROUND
+        setAttribute(hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &corner, sizeof(corner));
     }
-    return L"VISIBLE";
-}
-
-COLORREF StateColor(const gf::Session& session) {
-    if (session.errored()) {
-        return ui::kWarn;
-    }
-    if (session.hidden()) {
-        return ui::kNeon;
-    }
-    return ui::kMuted;
-}
-
-std::wstring ToLower(std::wstring text) {
-    for (wchar_t& ch : text) {
-        ch = static_cast<wchar_t>(::towlower(ch));
-    }
-    return text;
-}
-
-bool ContainsNoCase(const std::wstring& haystack, const std::wstring& needle) {
-    return haystack.find(needle) != std::wstring::npos;
+    ::FreeLibrary(dwm);
 }
 
 }  // namespace
@@ -147,6 +124,11 @@ App::InitResult App::Init(HINSTANCE instance, bool noSelfExclude) {
         return InitResult::AlreadyRunning;
     }
 
+    INITCOMMONCONTROLSEX controls = {};
+    controls.dwSize = sizeof(controls);
+    controls.dwICC = ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
+    ::InitCommonControlsEx(&controls);
+
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     std::wstring error;
@@ -174,8 +156,8 @@ App::InitResult App::Init(HINSTANCE instance, bool noSelfExclude) {
     }
 
     const UINT dpi = ::GetDpiForSystem();
-    const int width = MulDiv(kBaseWidth, dpi, 96);
-    const int height = MulDiv(kBaseHeight, dpi, 96);
+    const int width = MulDiv(760, dpi, 96);
+    const int height = MulDiv(560, dpi, 96);
 
     POINT cursor = {};
     ::GetCursorPos(&cursor);
@@ -204,8 +186,8 @@ App::InitResult App::Init(HINSTANCE instance, bool noSelfExclude) {
 
     g_app = this;
     hwnd_ = ::CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, kWindowClass, L"GhostFrame",
-                              WS_POPUP | WS_CLIPCHILDREN, x, y, windowWidth, windowHeight, nullptr,
-                              nullptr, instance, this);
+                              WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN, x, y, windowWidth,
+                              windowHeight, nullptr, nullptr, instance, this);
     if (hwnd_ == nullptr) {
         g_app = nullptr;
         ShowError(L"cannot create the GhostFrame window:\n" + gf::Win32Message(::GetLastError()));
@@ -286,8 +268,27 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
             OnCreate();
             return 0;
 
+        case WM_NCCALCSIZE:
+            // Drop the non-client frame of WS_THICKFRAME: the window stays
+            // borderless but can still be resized from its edges.
+            if (wParam == TRUE) {
+                return 0;
+            }
+            break;
+
+        case WM_GETMINMAXINFO: {
+            auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+            info->ptMinTrackSize.x = theme_.S(kMinWidth);
+            info->ptMinTrackSize.y = theme_.S(kMinHeight);
+            return 0;
+        }
+
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_SIZE:
+            OnSize();
+            return 0;
 
         case WM_PAINT:
             OnPaint();
@@ -335,7 +336,8 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
             } else if (item->CtlID == ID_BTN_SET_SELF) {
                 active = !settings_.ui.noSelfExclude;
             }
-            ui::DrawButton(item, theme_, active, item->CtlID == ID_BTN_CLOSE);
+            const bool hovered = hoveredButton_ != 0 && static_cast<int>(item->CtlID) == hoveredButton_;
+            ui::DrawButton(item, theme_, active, item->CtlID == ID_BTN_CLOSE, hovered);
             return TRUE;
         }
 
@@ -400,12 +402,44 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
 
         case WM_NCHITTEST: {
             const LRESULT hit = ::DefWindowProcW(hwnd_, message, wParam, lParam);
-            if (hit == HTCLIENT) {
-                POINT point = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-                ::ScreenToClient(hwnd_, &point);
-                if (MulDiv(point.y, 96, static_cast<int>(theme_.dpi)) < kTitleHeight) {
-                    return HTCAPTION;
-                }
+            if (hit != HTCLIENT) {
+                return hit;
+            }
+            POINT point = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ::ScreenToClient(hwnd_, &point);
+            RECT client = {};
+            ::GetClientRect(hwnd_, &client);
+            const int border = theme_.S(6);
+            const bool left = point.x < border;
+            const bool right = point.x >= client.right - border;
+            const bool top = point.y < border;
+            const bool bottom = point.y >= client.bottom - border;
+            if (top && left) {
+                return HTTOPLEFT;
+            }
+            if (top && right) {
+                return HTTOPRIGHT;
+            }
+            if (bottom && left) {
+                return HTBOTTOMLEFT;
+            }
+            if (bottom && right) {
+                return HTBOTTOMRIGHT;
+            }
+            if (top) {
+                return HTTOP;
+            }
+            if (bottom) {
+                return HTBOTTOM;
+            }
+            if (left) {
+                return HTLEFT;
+            }
+            if (right) {
+                return HTRIGHT;
+            }
+            if (point.y < theme_.S(theme_.m.titleHeight)) {
+                return HTCAPTION;
             }
             return hit;
         }
@@ -414,9 +448,25 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
             OnDpiChanged(HIWORD(wParam), reinterpret_cast<const RECT*>(lParam));
             return 0;
 
+        case WM_THEMECHANGED:
+        case WM_SETTINGCHANGE:
+            OnSettingChange();
+            return 0;
+
         case WM_CLOSE:
             OnClose();
             return 0;
+
+        case WM_SYSCOMMAND:
+            if ((wParam & 0xFFF0) == SC_MINIMIZE) {
+                if (settings_.ui.minimizeToTray) {
+                    ShowUi(false);
+                } else {
+                    ::ShowWindow(hwnd_, SW_MINIMIZE);
+                }
+                return 0;
+            }
+            break;
 
         case WM_DESTROY:
             OnDestroy();
@@ -462,6 +512,7 @@ void App::OnCreate() {
     ::SetTimer(hwnd_, ID_TIMER_REFRESH, 250, nullptr);
     RegisterHotkeys();
     AddTray();
+    ApplyRoundedCorners(hwnd_);
 
     if (!noSelfExclude_) {
         ::SetWindowDisplayAffinity(hwnd_, 0x11);
@@ -500,6 +551,10 @@ void App::OnDestroy() {
         ::UnhookWinEvent(winEventHook_);
         winEventHook_ = nullptr;
     }
+    if (tooltip_ != nullptr) {
+        ::DestroyWindow(tooltip_);
+        tooltip_ = nullptr;
+    }
     UnregisterHotkeys();
     RemoveTray();
     theme_.Destroy();
@@ -524,33 +579,38 @@ void App::CreateChildren() {
     struct ButtonSpec {
         int id;
         const wchar_t* text;
+        const wchar_t* tip;
     };
     const ButtonSpec buttons[] = {
-        {ID_BTN_HIDE_UI, L"_"},
-        {ID_BTN_EXIT, L"X"},
-        {ID_BTN_TOGGLE, L"[CTRL+SHIFT+H]  TOGGLE STEALTH"},
-        {ID_BTN_RESTORE_ALL, L"[CTRL+SHIFT+R]  RESTORE ALL TARGETS"},
-        {ID_BTN_MIN, L"[DOWN] MINIMIZE"},
-        {ID_BTN_RESTORE, L"[UP] RESTORE"},
-        {ID_BTN_CLOSE, L"[Q] CLOSE TARGET"},
-        {ID_BTN_REFRESH, L"REFRESH (F5)"},
-        {ID_BTN_ATTACH, L"ATTACH SELECTED"},
-        {ID_BTN_SET_RESET, L"RESET HOTKEYS"},
-        {ID_BTN_SET_ADD_FG, L"ADD FOREGROUND APP"},
-        {ID_BTN_SET_BROWSE, L"BROWSE EXE…"},
-        {ID_BTN_SET_ENABLE, L"ENABLE / DISABLE"},
-        {ID_BTN_SET_HIDE, L"TOGGLE HIDE"},
-        {ID_BTN_SET_REMOVE, L"REMOVE RULE"},
-        {ID_BTN_SET_APPLY, L"APPLY NOW"},
-        {ID_BTN_SET_HIDE_ATTACH, L"HIDE ON ATTACH"},
-        {ID_BTN_SET_TRAY, L"MINIMIZE TO TRAY"},
-        {ID_BTN_SET_SELF, L"EXCLUDE SELF FROM CAPTURE"},
+        {ID_BTN_HIDE_UI, L"_", L"Hide the window to the tray"},
+        {ID_BTN_EXIT, L"X", L"Exit GhostFrame and restore every target"},
+        {ID_BTN_TOGGLE, L"TOGGLE STEALTH", L"Toggle capture exclusion for the selection"},
+        {ID_BTN_RESTORE_ALL, L"RESTORE ALL", L"Restore every tracked window"},
+        {ID_BTN_MIN, L"MINIMIZE", L"Minimize the selected targets"},
+        {ID_BTN_RESTORE, L"RESTORE", L"Restore the selected targets"},
+        {ID_BTN_CLOSE, L"CLOSE", L"Ask the selected targets to close"},
+        {ID_BTN_REFRESH, L"REFRESH", L"Refresh the window list (F5)"},
+        {ID_BTN_ATTACH, L"ATTACH SELECTED", L"Attach the selected windows"},
+        {ID_BTN_SET_RESET, L"RESET HOTKEYS", L"Restore the default hotkeys"},
+        {ID_BTN_SET_ADD_FG, L"ADD FOREGROUND APP", L"Auto-capture the current foreground app"},
+        {ID_BTN_SET_BROWSE, L"BROWSE EXE…", L"Pick an executable to auto-capture"},
+        {ID_BTN_SET_ENABLE, L"ENABLE / DISABLE", L"Enable or disable the selected rule"},
+        {ID_BTN_SET_HIDE, L"TOGGLE HIDE", L"Hide the rule's windows on attach"},
+        {ID_BTN_SET_REMOVE, L"REMOVE RULE", L"Remove the selected rule"},
+        {ID_BTN_SET_APPLY, L"APPLY NOW", L"Run the rules against the windows open right now"},
+        {ID_BTN_SET_HIDE_ATTACH, L"HIDE ON ATTACH", L"Hide a target right after attaching it"},
+        {ID_BTN_SET_TRAY, L"MINIMIZE TO TRAY", L"Minimize to the tray instead of closing"},
+        {ID_BTN_SET_SELF, L"EXCLUDE SELF", L"Keep GhostFrame itself out of capture"},
     };
 
     for (const ButtonSpec& spec : buttons) {
-        ::CreateWindowExW(0, L"BUTTON", spec.text, WS_CHILD | BS_OWNERDRAW,
-                          0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(spec.id)),
-                          instance_, nullptr);
+        HWND button = ::CreateWindowExW(
+            0, L"BUTTON", spec.text, WS_CHILD | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(spec.id)), instance_, nullptr);
+        if (button != nullptr) {
+            ::SetWindowSubclass(button, &App::ButtonSubclassProc, static_cast<UINT_PTR>(spec.id),
+                                reinterpret_cast<DWORD_PTR>(this));
+        }
     }
 
     ::CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_,
@@ -561,101 +621,209 @@ void App::CreateChildren() {
         ::SendMessageW(search, EM_SETCUEBANNER, TRUE,
                        reinterpret_cast<LPARAM>(L"filter by title or process…"));
     }
+
+    SetupTooltips();
+}
+
+void App::SetupTooltips() {
+    if (tooltip_ == nullptr) {
+        tooltip_ = ::CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                                     WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT,
+                                     CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwnd_, nullptr,
+                                     instance_, nullptr);
+        if (tooltip_ == nullptr) {
+            return;
+        }
+        ::SetWindowPos(tooltip_, HWND_TOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ::SendMessageW(tooltip_, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
+    }
+
+    struct ToolSpec {
+        int id;
+        const wchar_t* text;
+    };
+    const ToolSpec tools[] = {
+        {ID_BTN_HIDE_UI, L"Hide to tray  ·  Ctrl+Shift+M"},
+        {ID_BTN_EXIT, L"Exit GhostFrame"},
+        {ID_BTN_TOGGLE, L"Toggle stealth  ·  Ctrl+Shift+H"},
+        {ID_BTN_RESTORE_ALL, L"Restore all  ·  Ctrl+Shift+R"},
+        {ID_BTN_MIN, L"Minimize target  ·  Ctrl+Shift+Down"},
+        {ID_BTN_RESTORE, L"Restore target  ·  Ctrl+Shift+Up"},
+        {ID_BTN_CLOSE, L"Close target  ·  Ctrl+Shift+Q"},
+        {ID_BTN_REFRESH, L"Refresh (F5)"},
+        {ID_BTN_ATTACH, L"Attach the selected windows (Enter)"},
+    };
+
+    for (const ToolSpec& spec : tools) {
+        HWND child = ::GetDlgItem(hwnd_, spec.id);
+        if (child == nullptr) {
+            continue;
+        }
+        TOOLINFOW tool = {};
+        tool.cbSize = sizeof(tool);
+        tool.uFlags = TTF_IDISHWND;
+        tool.hwnd = hwnd_;
+        tool.uId = reinterpret_cast<UINT_PTR>(child);
+        tool.lpszText = const_cast<LPWSTR>(spec.text);
+        ::SendMessageW(tooltip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+    }
+}
+
+void App::RelayTooltip(HWND button, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (tooltip_ == nullptr) {
+        return;
+    }
+    MSG relay = {};
+    relay.hwnd = button;
+    relay.message = message;
+    relay.wParam = wParam;
+    relay.lParam = lParam;
+    ::GetCursorPos(&relay.pt);
+    ::SendMessageW(tooltip_, TTM_RELAYEVENT, 0, reinterpret_cast<LPARAM>(&relay));
+}
+
+App::LayoutInfo App::ComputeLayout() const {
+    LayoutInfo info;
+    RECT client = {};
+    ::GetClientRect(hwnd_, &client);
+
+    const int width = client.right;
+    const int pad = theme_.S(theme_.m.pad);
+
+    int cursor = theme_.S(theme_.m.titleHeight);
+
+    const int tabTop = cursor + theme_.S(6);
+    const int tabH = theme_.S(theme_.m.tabHeight);
+    for (int i = 0; i < 3; ++i) {
+        const int left = theme_.S(theme_.m.pad) + i * theme_.S(theme_.m.tabStep);
+        info.tabs[i] = {left, tabTop, left + theme_.S(theme_.m.tabWidth), tabTop + tabH};
+    }
+    cursor = tabTop + tabH + theme_.S(6);
+
+    const int statusH = theme_.S(theme_.m.statusHeight);
+    info.statusBar = {pad, cursor, width - pad, cursor + statusH};
+    cursor = info.statusBar.bottom + theme_.S(6);
+
+    const int headerH = theme_.S(theme_.m.headerHeight);
+    info.header = {pad, cursor, width - pad, cursor + headerH};
+    cursor = info.header.bottom + theme_.S(8);
+
+    const int footerH = theme_.S(theme_.m.footerHeight);
+    const int footerTop = client.bottom - pad - footerH;
+    info.footer = {pad, footerTop, width - pad, footerTop + footerH};
+    info.logLink = {width - pad - theme_.S(96), footerTop, width - pad, footerTop + footerH};
+    const int contentBottom = footerTop - theme_.S(8);
+
+    if (tab_ == Tab::Targets) {
+        const int controlsH = theme_.S(theme_.m.buttonHeight) + theme_.S(8) + theme_.S(28);
+        info.controls = {pad, contentBottom - controlsH, width - pad, contentBottom};
+        info.list = {pad, cursor, width - pad, info.controls.top - theme_.S(10)};
+    } else if (tab_ == Tab::Windows) {
+        info.controls = {};
+        info.list = {pad, cursor, width - pad, contentBottom};
+    } else {
+        const int listH = theme_.S(150);
+        info.list = {pad, cursor, width - pad, cursor + listH};
+        int y = info.list.bottom + theme_.S(8);
+
+        info.settingsRowA = {pad, y, width - pad, y + theme_.S(28)};
+        y += theme_.S(28) + theme_.S(14);
+
+        info.rulesHeader = {pad, y, width - pad, y + theme_.S(18)};
+        y += theme_.S(18) + theme_.S(4);
+
+        const int bottomBlock = theme_.S(28) + theme_.S(8) + theme_.S(28) + theme_.S(12) +
+                                theme_.S(30);
+        info.rulesList = {pad, y, width - pad, contentBottom - bottomBlock - theme_.S(8)};
+        y = info.rulesList.bottom + theme_.S(8);
+
+        info.settingsRowB = {pad, y, width - pad, y + theme_.S(28)};
+        y += theme_.S(28) + theme_.S(8);
+        info.settingsRowC = {pad, y, width - pad, y + theme_.S(28)};
+        y += theme_.S(28) + theme_.S(12);
+        info.settingsRowD = {pad, y, width - pad, y + theme_.S(30)};
+    }
+
+    return info;
 }
 
 void App::Layout() {
-    RECT client = {};
-    ::GetClientRect(hwnd_, &client);
-    const int width = MulDiv(client.right, 96, static_cast<int>(theme_.dpi));
+    layout_ = ComputeLayout();
 
-    auto place = [this](int id, int x, int y, int w, int h) {
+    auto placeRect = [this](int id, const RECT& rect) {
         HWND child = ::GetDlgItem(hwnd_, id);
         if (child != nullptr) {
-            ::SetWindowPos(child, nullptr, theme_.S(x), theme_.S(y), theme_.S(w), theme_.S(h),
-                           SWP_NOZORDER | SWP_NOACTIVATE);
+            ::SetWindowPos(child, nullptr, rect.left, rect.top, rect.right - rect.left,
+                           rect.bottom - rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
     };
+    auto place = [this, &placeRect](int id, int x, int y, int w, int h) {
+        placeRect(id, RECT{theme_.S(x), theme_.S(y), theme_.S(x + w), theme_.S(y + h)});
+    };
 
-    place(ID_BTN_HIDE_UI, width - 78, 7, 30, 22);
-    place(ID_BTN_EXIT, width - 44, 7, 30, 22);
+    RECT full = {};
+    ::GetClientRect(hwnd_, &full);
+    const int width = MulDiv(full.right, 96, static_cast<int>(theme_.dpi));
 
-    const int controlWidth = (width - 32 - 16) / 2;
-    const int controlTop = kListBottom + 8;
-    place(ID_BTN_TOGGLE, 16, controlTop, controlWidth, 30);
-    place(ID_BTN_RESTORE_ALL, 16 + controlWidth + 16, controlTop, controlWidth, 30);
+    place(ID_BTN_HIDE_UI, width - 78, 8, 30, 24);
+    place(ID_BTN_EXIT, width - 44, 8, 30, 24);
 
-    const int rowTop = controlTop + 38;
-    const int third = (width - 32 - 2 * 12) / 3;
-    place(ID_BTN_MIN, 16, rowTop, third, 28);
-    place(ID_BTN_RESTORE, 16 + third + 12, rowTop, third, 28);
-    place(ID_BTN_CLOSE, 16 + 2 * (third + 12), rowTop, third, 28);
+    // TARGETS controls (shown only while that tab is active).
+    if (tab_ == Tab::Targets) {
+        const int controlWidth = (width - 32 - 16) / 2;
+        const int controlTop = MulDiv(layout_.controls.top, 96, static_cast<int>(theme_.dpi));
+        place(ID_BTN_TOGGLE, 16, controlTop, controlWidth, 30);
+        place(ID_BTN_RESTORE_ALL, 16 + controlWidth + 16, controlTop, controlWidth, 30);
+        const int rowTop = controlTop + 38;
+        const int third = (width - 32 - 2 * 12) / 3;
+        place(ID_BTN_MIN, 16, rowTop, third, 28);
+        place(ID_BTN_RESTORE, 16 + third + 12, rowTop, third, 28);
+        place(ID_BTN_CLOSE, 16 + 2 * (third + 12), rowTop, third, 28);
+    }
 
-    // WINDOWS-tab header actions; visibility is toggled with the tab.
-    place(ID_BTN_ATTACH, width - 16 - 190, kHeaderTop, 190, 22);
-    place(ID_BTN_REFRESH, width - 16 - 190 - 8 - 90, kHeaderTop, 90, 22);
-    place(ID_EDIT_SEARCH, kTabsLeft + kTabStep * 3 + 20, kTabsTop,
-          width - (kTabsLeft + kTabStep * 3 + 20) - 16, 24);
+    // WINDOWS-tab header actions.
+    const int headerTop = MulDiv(layout_.header.top, 96, static_cast<int>(theme_.dpi));
+    place(ID_BTN_ATTACH, width - 16 - 190, headerTop, 190, 22);
+    place(ID_BTN_REFRESH, width - 16 - 190 - 8 - 90, headerTop, 90, 22);
+    const int tabStep = theme_.m.tabStep;
+    place(ID_EDIT_SEARCH, theme_.m.pad + tabStep * 3 + 20, theme_.m.tabTop,
+          width - (theme_.m.pad + tabStep * 3 + 20) - 16, 24);
 
-    // SETTINGS tab.  Two lists (hotkeys, auto-capture rules) with their action
-    // rows and the three UI option toggles underneath.
-    place(ID_BTN_SET_RESET, 16, 258, controlWidth, 26);
-    place(ID_BTN_SET_ADD_FG, 16 + controlWidth + 16, 258, controlWidth, 26);
+    // SETTINGS tab.
+    auto placeRow = [&](int id, const RECT& rect, int slot, int slots) {
+        const int gap = theme_.S(10);
+        const int totalWidth = rect.right - rect.left;
+        const int slotWidth = (totalWidth - (slots - 1) * gap) / slots;
+        RECT r = {rect.left + slot * (slotWidth + gap), rect.top,
+                  rect.left + slot * (slotWidth + gap) + slotWidth, rect.bottom};
+        placeRect(id, r);
+    };
 
-    const int ruleWidth = (width - 32 - 3 * 10) / 4;
-    place(ID_BTN_SET_ENABLE, 16, 398, ruleWidth, 26);
-    place(ID_BTN_SET_HIDE, 16 + (ruleWidth + 10), 398, ruleWidth, 26);
-    place(ID_BTN_SET_REMOVE, 16 + 2 * (ruleWidth + 10), 398, ruleWidth, 26);
-    place(ID_BTN_SET_APPLY, 16 + 3 * (ruleWidth + 10), 398, ruleWidth, 26);
-    place(ID_BTN_SET_BROWSE, 16, 366, width - 32, 26);
+    if (layout_.settingsRowA.right > layout_.settingsRowA.left) {
+        placeRow(ID_BTN_SET_RESET, layout_.settingsRowA, 0, 2);
+        placeRow(ID_BTN_SET_ADD_FG, layout_.settingsRowA, 1, 2);
+        placeRect(ID_BTN_SET_BROWSE, layout_.settingsRowB);
+        placeRow(ID_BTN_SET_ENABLE, layout_.settingsRowC, 0, 4);
+        placeRow(ID_BTN_SET_HIDE, layout_.settingsRowC, 1, 4);
+        placeRow(ID_BTN_SET_REMOVE, layout_.settingsRowC, 2, 4);
+        placeRow(ID_BTN_SET_APPLY, layout_.settingsRowC, 3, 4);
+        placeRow(ID_BTN_SET_HIDE_ATTACH, layout_.settingsRowD, 0, 3);
+        placeRow(ID_BTN_SET_TRAY, layout_.settingsRowD, 1, 3);
+        placeRow(ID_BTN_SET_SELF, layout_.settingsRowD, 2, 3);
+    }
 
-    const int optionWidth = (width - 32 - 2 * 12) / 3;
-    place(ID_BTN_SET_HIDE_ATTACH, 16, 434, optionWidth, 28);
-    place(ID_BTN_SET_TRAY, 16 + optionWidth + 12, 434, optionWidth, 28);
-    place(ID_BTN_SET_SELF, 16 + 2 * (optionWidth + 12), 434, optionWidth, 28);
-
-    targetsList_.SetBounds(ListRect(), theme_);
-    windowsList_.SetBounds(ListRect(), theme_);
-    hotkeysList_.SetBounds(HotkeysListRect(), theme_);
-    rulesList_.SetBounds(RulesListRect(), theme_);
-}
-
-RECT App::HotkeysListRect() const {
-    RECT client = {};
-    ::GetClientRect(hwnd_, &client);
-    RECT list = {};
-    list.left = theme_.S(16);
-    list.right = client.right - theme_.S(16);
-    list.top = theme_.S(kListTop);
-    list.bottom = theme_.S(250);
-    return list;
-}
-
-RECT App::RulesListRect() const {
-    RECT client = {};
-    ::GetClientRect(hwnd_, &client);
-    RECT list = {};
-    list.left = theme_.S(16);
-    list.right = client.right - theme_.S(16);
-    list.top = theme_.S(292);
-    list.bottom = theme_.S(390);
-    return list;
+    targetsList_.SetBounds(layout_.list, theme_);
+    windowsList_.SetBounds(layout_.list, theme_);
+    hotkeysList_.SetBounds(layout_.list, theme_);
+    rulesList_.SetBounds(layout_.rulesList, theme_);
 }
 
 RECT App::TabRect(int index) const {
-    RECT tab = {theme_.S(kTabsLeft + index * kTabStep), theme_.S(kTabsTop),
-                theme_.S(kTabsLeft + index * kTabStep + kTabWidth), theme_.S(kTabsTop + kTabHeight)};
-    return tab;
-}
-
-RECT App::ListRect() const {
-    RECT client = {};
-    ::GetClientRect(hwnd_, &client);
-    RECT list = {};
-    list.left = theme_.S(16);
-    list.right = client.right - theme_.S(16);
-    list.top = theme_.S(kListTop);
-    list.bottom = theme_.S(kListBottom);
-    return list;
+    if (index < 0 || index >= 3) {
+        return RECT{};
+    }
+    return layout_.tabs[index];
 }
 
 int App::HotkeyCommandId(gf::HotkeyAction action) const {
@@ -747,49 +915,6 @@ bool App::ApplyHotkeys(const gf::Settings& candidate, std::wstring& error) {
     }
     MarkSettingsDirty();
     return true;
-}
-
-void App::ResetHotkeysToDefaults() {
-    gf::Settings defaults = gf::DefaultSettings();
-    std::wstring error;
-    if (ApplyHotkeys(defaults, error)) {
-        BuildSettingsRows();
-        SetStatus(L"HOTKEYS RESET TO DEFAULTS");
-    } else {
-        SetStatus(L"ERROR: " + error, true);
-    }
-}
-
-void App::BeginRebind(gf::HotkeyAction action) {
-    rebinding_ = true;
-    rebindAction_ = action;
-    SetStatus(std::wstring(L"PRESS A COMBINATION FOR ") + gf::HotkeyActionLabel(action) +
-              L" — ESC TO CANCEL");
-    ::SetFocus(hwnd_);
-    InvalidateAll();
-}
-
-void App::FinishRebind(UINT modifiers, UINT virtualKey) {
-    const gf::HotkeyAction action = rebindAction_;
-    rebinding_ = false;
-    rebindAction_ = gf::HotkeyAction::Count;
-
-    if (action == gf::HotkeyAction::Count) {
-        return;
-    }
-
-    gf::Settings candidate = settings_;
-    candidate.hotkeys[static_cast<int>(action)] = gf::HotkeyBinding{modifiers, virtualKey};
-
-    std::wstring error;
-    if (ApplyHotkeys(candidate, error)) {
-        BuildSettingsRows();
-        SetStatus(std::wstring(gf::HotkeyActionLabel(action)) + L" = " +
-                  gf::FormatHotkey(modifiers, virtualKey));
-    } else {
-        SetStatus(L"ERROR: " + error, true);
-    }
-    InvalidateAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -927,117 +1052,9 @@ void App::ScanAutoCapture() {
     }
 }
 
-void App::ApplyAutoRulesNow() {
-    if (attachThread_ != nullptr) {
-        SetStatus(L"ATTACHING… — WAIT FOR THE CURRENT ATTACH TO FINISH", true);
-        return;
-    }
-    autoLastScan_ = 0;  // bypass the throttle for an explicit request
-    ScanAutoCapture();
-    if (attachThread_ == nullptr) {
-        SetStatus(L"AUTO-CAPTURE RULES APPLIED — NO NEW WINDOWS MATCHED");
-    }
-}
-
-void App::AddRuleForWindow(HWND hwnd) {
-    if (hwnd == nullptr || !::IsWindow(hwnd) || hwnd == hwnd_) {
-        SetStatus(L"NO FOREGROUND WINDOW TO ADD", true);
-        return;
-    }
-
-    DWORD pid = 0;
-    ::GetWindowThreadProcessId(hwnd, &pid);
-    if (pid == 0 || pid == ::GetCurrentProcessId()) {
-        SetStatus(L"GHOSTFRAME CANNOT AUTO-CAPTURE ITSELF", true);
-        return;
-    }
-    std::wstring path;
-    HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (process != nullptr) {
-        wchar_t buffer[1024] = {};
-        DWORD size = _countof(buffer);
-        if (::QueryFullProcessImageNameW(process, 0, buffer, &size)) {
-            path.assign(buffer, size);
-        }
-        ::CloseHandle(process);
-    }
-    if (path.empty()) {
-        SetStatus(L"CANNOT READ THE PROCESS IMAGE NAME", true);
-        return;
-    }
-
-    AddRuleForExePath(path);
-}
-
-void App::AddRuleForExePath(const std::wstring& path) {
-    const std::wstring::size_type slash = path.find_last_of(L"\\/");
-    const std::wstring name = slash == std::wstring::npos ? path : path.substr(slash + 1);
-    if (name.empty()) {
-        SetStatus(L"THAT FILE HAS NO NAME", true);
-        return;
-    }
-
-    for (const gf::AutoAttachRule& rule : settings_.autoAttach) {
-        if (_wcsicmp(rule.match.c_str(), L"exe") == 0 &&
-            _wcsicmp(rule.value.c_str(), name.c_str()) == 0) {
-            SetStatus(L"AN AUTO-CAPTURE RULE FOR " + name + L" ALREADY EXISTS", true);
-            return;
-        }
-    }
-
-    settings_.autoAttach.push_back(gf::AutoAttachRule{true, L"exe", name, true});
-    MarkSettingsDirty();
-    BuildSettingsRows();
-    SetStatus(L"AUTO-CAPTURE RULE ADDED FOR " + name);
-}
-
-void App::BuildSettingsRows() {
-    std::vector<ui::ListRow> hotkeys;
-    for (int i = 0; i < gf::kHotkeyCount; ++i) {
-        const gf::HotkeyAction action = static_cast<gf::HotkeyAction>(i);
-        ui::ListRow row;
-        row.title = gf::HotkeyActionLabel(action);
-        row.meta = rebinding_ && rebindAction_ == action
-                       ? L"press a combination…"
-                       : gf::FormatHotkey(settings_.hotkeys[i].modifiers,
-                                          settings_.hotkeys[i].virtualKey);
-        row.data = i;
-        hotkeys.push_back(std::move(row));
-    }
-    hotkeysList_.SetEmptyText(L"NO HOTKEYS");
-    hotkeysList_.SetRows(std::move(hotkeys));
-
-    std::vector<ui::ListRow> rules;
-    for (size_t i = 0; i < settings_.autoAttach.size(); ++i) {
-        const gf::AutoAttachRule& rule = settings_.autoAttach[i];
-        ui::ListRow row;
-        row.title = rule.value;
-        row.meta = rule.match + (rule.hide ? L"  ·  hide on attach" : L"  ·  keep visible");
-        row.data = static_cast<intptr_t>(i);
-        row.badges.push_back({rule.enabled ? L"ENABLED" : L"DISABLED",
-                              rule.enabled ? ui::kNeon : ui::kMuted});
-        rules.push_back(std::move(row));
-    }
-    rulesList_.SetEmptyText(L"NO AUTO-CAPTURE RULES — ADD THE FOREGROUND APP");
-    rulesList_.SetRows(std::move(rules));
-    if (selectedRule_ >= static_cast<int>(settings_.autoAttach.size())) {
-        selectedRule_ = settings_.autoAttach.empty() ? -1
-                                                     : static_cast<int>(settings_.autoAttach.size()) - 1;
-    }
-}
-
-void App::OnSettingsListAction(ui::ListWidget::Action action, bool hotkeyList) {
-    if (action.kind == ui::ListWidget::ActionKind::None || action.index < 0) {
-        return;
-    }
-    if (hotkeyList) {
-        BeginRebind(static_cast<gf::HotkeyAction>(action.index));
-        return;
-    }
-    selectedRule_ = action.index;
-    rulesList_.Select(action.index);
-    InvalidateAll();
-}
+// ---------------------------------------------------------------------------
+// Painting
+// ---------------------------------------------------------------------------
 
 void App::OnPaint() {
     PAINTSTRUCT paint = {};
@@ -1063,89 +1080,123 @@ void App::OnPaint() {
 void App::PaintInto(HDC dc, const RECT& client) {
     ui::FillSolid(dc, client, ui::kBg);
 
-    const int width = MulDiv(client.right, 96, static_cast<int>(theme_.dpi));
+    const bool focused = ::GetFocus() == hwnd_;
 
-    const RECT titleBar = {0, 0, client.right, theme_.S(kTitleHeight)};
+    // Title bar.
+    const RECT titleBar = {0, 0, client.right, theme_.S(theme_.m.titleHeight)};
     ui::FillSolid(dc, titleBar, ui::kPanel);
-    const RECT titleLine = {0, theme_.S(kTitleHeight) - 1, client.right, theme_.S(kTitleHeight)};
+    const RECT titleLine = {0, titleBar.bottom - 1, client.right, titleBar.bottom};
     ui::FillSolid(dc, titleLine, ui::kNeonDim);
 
-    RECT titleRect = {theme_.S(16), 0, theme_.S(width - 150), theme_.S(kTitleHeight)};
+    RECT titleRect = {theme_.S(theme_.m.pad), 0, client.right - theme_.S(150), titleBar.bottom};
     ui::DrawLabel(dc, L"// GHOSTFRAME", titleRect, theme_.title, ui::kNeon,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    RECT versionRect = {theme_.S(width - 140), 0, theme_.S(width - 84),
-                        theme_.S(kTitleHeight)};
+    RECT versionRect = {client.right - theme_.S(140), 0, client.right - theme_.S(84),
+                        titleBar.bottom};
     ui::DrawLabel(dc, L"v" GF_VERSION_STRING, versionRect, theme_.small, ui::kMuted,
                   DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-    // Tabs
+    // Tabs.
     static const wchar_t* const kTabNames[] = {L"TARGETS", L"WINDOWS", L"SETTINGS"};
     const int activeTab = tab_ == Tab::Targets ? 0 : (tab_ == Tab::Windows ? 1 : 2);
     for (int index = 0; index < 3; ++index) {
         const bool active = activeTab == index;
-        const RECT tab = TabRect(index);
-        ui::FillSolid(dc, tab, active ? ui::kPanelHi : ui::kPanel);
-        ui::StrokeFrame(dc, tab, active ? ui::kNeon : ui::kBorder, 1);
+        const RECT tab = layout_.tabs[index];
+        ui::FillRoundRect(dc, tab, active ? ui::kPanelHi : ui::kPanel, theme_.S(6));
+        ui::StrokeRoundFrame(dc, tab, active ? ui::kNeon : ui::kBorder, theme_.S(6), 1);
         ui::DrawLabel(dc, kTabNames[index], tab, theme_.small, active ? ui::kNeon : ui::kMuted,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    RECT statusRect = {theme_.S(16), theme_.S(kStatusTop), theme_.S(width - 16),
-                       theme_.S(kHeaderTop - 4)};
+    // Status bar: the transient status on the left, the live summary on the
+    // right.
+    wchar_t summary[96] = {};
+    int hidden = 0;
+    int errored = 0;
+    for (size_t i = 0; i < sessions_.Count(); ++i) {
+        const gf::Session& session = sessions_.At(i);
+        if (session.hidden()) {
+            ++hidden;
+        }
+        if (session.errored()) {
+            ++errored;
+        }
+    }
+    swprintf_s(summary, L"%zu tracked · %d hidden · %d error", sessions_.Count(), hidden, errored);
+
+    const SIZE summarySize = ui::MeasureTextSize(dc, theme_.small, summary);
+    RECT summaryRect = {layout_.statusBar.right - summarySize.cx, layout_.statusBar.top,
+                        layout_.statusBar.right, layout_.statusBar.bottom};
+    ui::DrawLabel(dc, summary, summaryRect, theme_.small, errored > 0 ? ui::kWarn : ui::kMuted,
+                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    RECT statusRect = layout_.statusBar;
+    statusRect.right = summaryRect.left - theme_.S(12);
     ui::DrawLabel(dc, status_.c_str(), statusRect, theme_.body,
                   statusError_ ? ui::kWarn : ui::kText,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
+    // Per-tab header.
     if (tab_ == Tab::Targets) {
-        RECT headerLeft = {theme_.S(16), theme_.S(kHeaderTop), theme_.S(220),
-                           theme_.S(kHeaderTop + 20)};
-        ui::DrawLabel(dc, L"TARGETS", headerLeft, theme_.small, ui::kMuted,
+        ui::DrawLabel(dc, L"TRACKED TARGETS", layout_.header, theme_.small, ui::kMuted,
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        wchar_t countText[64] = {};
-        swprintf_s(countText, L"%zu TRACKED", sessions_.Count());
-        RECT headerRight = {theme_.S(width - 220), theme_.S(kHeaderTop), theme_.S(width - 16),
-                            theme_.S(kHeaderTop + 20)};
-        ui::DrawLabel(dc, countText, headerRight, theme_.small, ui::kMuted,
-                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     } else if (tab_ == Tab::Windows) {
-        RECT headerLeft = {theme_.S(16), theme_.S(kHeaderTop), theme_.S(320),
-                           theme_.S(kHeaderTop + 20)};
         wchar_t header[96] = {};
-        swprintf_s(header, L"WINDOWS — %d AVAILABLE", windowsList_.SelectableCount());
-        ui::DrawLabel(dc, header, headerLeft, theme_.small, ui::kMuted,
+        swprintf_s(header, L"AVAILABLE WINDOWS — %d", windowsList_.SelectableCount());
+        ui::DrawLabel(dc, header, layout_.header, theme_.small, ui::kMuted,
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     } else {
-        RECT headerLeft = {theme_.S(16), theme_.S(kHeaderTop), theme_.S(width - 16),
-                           theme_.S(kHeaderTop + 20)};
-        ui::DrawLabel(dc, L"GLOBAL HOTKEYS — CLICK A ROW TO REBIND", headerLeft, theme_.small,
+        ui::DrawLabel(dc, L"GLOBAL HOTKEYS — CLICK A ROW TO REBIND", layout_.header, theme_.small,
                       ui::kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        RECT rulesHeader = {theme_.S(16), theme_.S(272), theme_.S(width - 16), theme_.S(290)};
-        ui::DrawLabel(dc, L"AUTO-CAPTURE RULES — CAPTURE THESE APPS WHEN THEY APPEAR", rulesHeader,
-                      theme_.small, ui::kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (layout_.rulesHeader.right > layout_.rulesHeader.left) {
+            ui::DrawLabel(dc, L"AUTO-CAPTURE RULES — CAPTURE THESE APPS WHEN THEY APPEAR",
+                          layout_.rulesHeader, theme_.small, ui::kMuted,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
     }
 
     if (tab_ == Tab::Targets) {
-        targetsList_.Paint(dc, theme_);
+        targetsList_.Paint(dc, theme_, focused);
     } else if (tab_ == Tab::Windows) {
-        windowsList_.Paint(dc, theme_);
+        windowsList_.Paint(dc, theme_, focused);
     } else {
-        hotkeysList_.Paint(dc, theme_);
-        rulesList_.Paint(dc, theme_);
+        hotkeysList_.Paint(dc, theme_, focused);
+        rulesList_.Paint(dc, theme_, false);
     }
 
-    RECT footer = {theme_.S(16), theme_.S(kListBottom + 76), theme_.S(width - 16),
-                   theme_.S(kListBottom + 98)};
-    ui::DrawLabel(dc, L"WDA_EXCLUDEFROMCAPTURE · PER-MONITOR DPI · NO ADMIN REQUIRED", footer,
-                  theme_.small, ui::kMuted,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    // Footer.
+    ui::DrawLabel(dc, L"WDA_EXCLUDEFROMCAPTURE · PER-MONITOR DPI · NO ADMIN REQUIRED",
+                  layout_.footer, theme_.small, ui::kMuted,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    RECT logRect = layout_.logLink;
+    ui::DrawLabel(dc, L"OPEN LOG", logRect, theme_.small, ui::kNeon,
+                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    // Transient toast.
+    if (!toast_.empty() && ::GetTickCount64() < toastUntil_) {
+        const SIZE size = ui::MeasureTextSize(dc, theme_.body, toast_);
+        const int width = size.cx + theme_.S(32);
+        const int height = theme_.S(34);
+        const int left = (client.right - width) / 2;
+        RECT toast = {left, titleBar.bottom + theme_.S(10), left + width,
+                      titleBar.bottom + theme_.S(10) + height};
+        ui::FillRoundRect(dc, toast, ui::kToastBg, theme_.S(8));
+        ui::StrokeRoundFrame(dc, toast, toastError_ ? ui::kWarn : ui::kNeon, theme_.S(8), 1);
+        ui::DrawLabel(dc, toast_.c_str(), toast, theme_.body,
+                      toastError_ ? ui::kWarn : ui::kText,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
 }
 
 void App::OnTimer() {
     if (settingsDirty_ && ::GetTickCount64() >= settingsSaveDue_) {
         SaveSettings();
+    }
+
+    if (!toast_.empty() && ::GetTickCount64() >= toastUntil_) {
+        toast_.clear();
+        InvalidateAll();
     }
 
     RetryPendingCommand();
@@ -1183,90 +1234,16 @@ void App::OnTimer() {
     InvalidateAll();
 }
 
-void App::BuildTargetRows() {
-    std::vector<ui::ListRow> rows;
-    rows.reserve(sessions_.Count());
-
-    for (size_t i = 0; i < sessions_.Count(); ++i) {
-        const gf::Session& session = sessions_.At(i);
-        ui::ListRow row;
-        row.title = session.title;
-        row.icon = windowEnumerator_.IconForWindow(session.hwnd);
-        row.data = reinterpret_cast<intptr_t>(session.hwnd);
-
-        wchar_t meta[96] = {};
-        swprintf_s(meta, L"PID %u  %s", session.pid, session.x86 ? L"x86" : L"x64");
-        row.meta = meta;
-
-        row.badges.push_back({StateLabel(session), StateColor(session)});
-
-        rows.push_back(std::move(row));
-    }
-
-    targetsList_.SetEmptyText(L"NO TARGETS — PICK A WINDOW ON THE WINDOWS TAB");
-    targetsList_.SetRows(std::move(rows));
-}
-
-void App::BuildWindowRows() {
-    const std::wstring filter = ToLower(windowFilter_);
-
-    std::vector<ui::ListRow> rows;
-    for (const gf::WindowInfo& window : windowEnumerator_.windows()) {
-        const bool tracked = sessions_.IndexOf(window.hwnd) >= 0;
-
-        if (!filter.empty()) {
-            const std::wstring title = ToLower(window.title);
-            const std::wstring process = ToLower(window.processName);
-            if (!ContainsNoCase(title, filter) && !ContainsNoCase(process, filter)) {
-                continue;
-            }
-        }
-
-        ui::ListRow row;
-        row.title = window.title;
-        row.icon = window.icon;
-        row.data = reinterpret_cast<intptr_t>(window.hwnd);
-        row.selectable = !tracked;
-        row.dim = tracked;
-
-        wchar_t meta[160] = {};
-        swprintf_s(meta, L"%s  PID %u  %s", window.processName.c_str(), window.pid,
-                   gf::WindowEnumerator::ArchLabel(window.arch));
-        row.meta = meta;
-
-        if (tracked) {
-            row.badges.push_back({L"TRACKED", ui::kMuted});
-        } else {
-            bool autoMatch = false;
-            for (const gf::AutoAttachRule& rule : settings_.autoAttach) {
-                if (gf::RuleMatches(rule, window.processName, window.title)) {
-                    autoMatch = true;
-                    break;
-                }
-            }
-            if (autoMatch) {
-                row.badges.push_back({L"AUTO", ui::kNeon});
-            }
-        }
-        if (window.elevated) {
-            row.badges.push_back({L"ADMIN", ui::kWarn});
-        }
-        if (window.uwp) {
-            row.badges.push_back({L"UWP", ui::kWarn});
-        }
-
-        rows.push_back(std::move(row));
-    }
-
-    windowsList_.SetEmptyText(filter.empty() ? L"NO WINDOWS FOUND"
-                                             : L"NO WINDOWS MATCH THE FILTER");
-    windowsList_.SetRows(std::move(rows));
-    UpdateAttachButton();
-}
-
 void App::ApplyTabControls() {
+    const bool targets = tab_ == Tab::Targets;
     const bool windows = tab_ == Tab::Windows;
     const bool settings = tab_ == Tab::Settings;
+
+    for (int id : {ID_BTN_TOGGLE, ID_BTN_RESTORE_ALL, ID_BTN_MIN, ID_BTN_RESTORE, ID_BTN_CLOSE}) {
+        if (HWND child = ::GetDlgItem(hwnd_, id)) {
+            ::ShowWindow(child, targets ? SW_SHOW : SW_HIDE);
+        }
+    }
 
     for (int id : {ID_BTN_REFRESH, ID_BTN_ATTACH}) {
         if (HWND child = ::GetDlgItem(hwnd_, id)) {
@@ -1292,6 +1269,7 @@ void App::SelectTab(Tab tab) {
         return;
     }
     tab_ = tab;
+    Layout();
     ApplyTabControls();
 
     if (tab_ == Tab::Windows) {
@@ -1315,125 +1293,26 @@ void App::SelectTab(Tab tab) {
     InvalidateAll();
 }
 
-void App::RefreshWindows() {
-    windowEnumerator_.Refresh(hwnd_);
-    BuildWindowRows();
+void App::OnSize() {
+    Layout();
     InvalidateAll();
 }
 
-void App::OnFilterChanged() {
-    wchar_t buffer[128] = {};
+void App::OnSettingChange() {
+    theme_.Create(::GetDpiForWindow(hwnd_));
     if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
-        ::GetWindowTextW(search, buffer, _countof(buffer) - 1);
+        ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
     }
-    windowFilter_ = buffer;
-    BuildWindowRows();
-    InvalidateAll();
+    if (tooltip_ != nullptr) {
+        ::SendMessageW(tooltip_, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
+    }
+    Layout();
+    ::InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
-void App::ApplyListAction(ui::ListWidget::Action action, bool windowsTab) {
-    if (action.kind == ui::ListWidget::ActionKind::None || action.index < 0) {
-        return;
-    }
-
-    if (windowsTab) {
-        if (action.kind == ui::ListWidget::ActionKind::Activate) {
-            AttachSelectedWindow();
-        } else {
-            UpdateAttachButton();
-        }
-        return;
-    }
-
-    const ui::ListWidget& list = targetsList_;
-    const int index = sessions_.IndexOf(reinterpret_cast<HWND>(list.DataAt(action.index)));
-    if (index < 0) {
-        return;
-    }
-    selected_ = index;
-    if (action.kind == ui::ListWidget::ActionKind::Activate ||
-        action.kind == ui::ListWidget::ActionKind::Toggle) {
-        if (targetsList_.SelectedCount() > 1) {
-            ToggleSelection();
-        } else {
-            ToggleStealth(index);
-        }
-    }
-    InvalidateAll();
-}
-
-void App::AttachSelectedWindow() {
-    if (tab_ != Tab::Windows) {
-        return;
-    }
-
-    const std::vector<int> selected = windowsList_.SelectedIndices();
-    if (selected.empty()) {
-        SetStatus(L"NO WINDOW SELECTED", true);
-        return;
-    }
-
-    std::vector<HWND> targets;
-    std::wstring firstReason;
-    for (int index : selected) {
-        const HWND target = reinterpret_cast<HWND>(windowsList_.DataAt(index));
-        if (target == nullptr) {
-            continue;
-        }
-        std::wstring reason;
-        if (!gf::ValidateTarget(target, reason)) {
-            if (firstReason.empty()) {
-                firstReason = reason;
-            }
-            continue;
-        }
-        if (sessions_.IndexOf(target) >= 0) {
-            continue;
-        }
-        targets.push_back(target);
-    }
-
-    if (targets.empty()) {
-        SetStatus(firstReason.empty() ? L"THE WINDOW IS ALREADY TRACKED"
-                                      : L"ATTACH FAILED: " + firstReason,
-                  true);
-        return;
-    }
-    StartAttachBatch(std::move(targets), settings_.ui.hideOnAttach);
-}
-
-void App::AttachProcessWindows(HWND sample) {
-    if (sample == nullptr) {
-        return;
-    }
-
-    DWORD pid = 0;
-    ::GetWindowThreadProcessId(sample, &pid);
-    if (pid == 0) {
-        return;
-    }
-
-    std::vector<HWND> targets;
-    for (const gf::WindowInfo& window : windowEnumerator_.windows()) {
-        if (window.pid != pid || window.hwnd == nullptr) {
-            continue;
-        }
-        if (sessions_.IndexOf(window.hwnd) >= 0) {
-            continue;
-        }
-        std::wstring reason;
-        if (!gf::ValidateTarget(window.hwnd, reason)) {
-            continue;
-        }
-        targets.push_back(window.hwnd);
-    }
-
-    if (targets.empty()) {
-        SetStatus(L"NO ATTACHABLE WINDOWS IN THIS PROCESS", true);
-        return;
-    }
-    StartAttachBatch(std::move(targets), settings_.ui.hideOnAttach);
-}
+// ---------------------------------------------------------------------------
+// Mouse / keyboard
+// ---------------------------------------------------------------------------
 
 void App::OnMouseMove(int x, int y) {
     bool changed = false;
@@ -1490,7 +1369,16 @@ void App::OnMouseWheel(int x, int y, int delta) {
 }
 
 void App::OnLButtonDown(int x, int y, bool ctrl, bool shift) {
-    // Tab switching first.
+    // The clickable "open log" affordance in the footer.
+    {
+        POINT point = {x, y};
+        if (::PtInRect(&layout_.logLink, point)) {
+            OpenLogFolder();
+            return;
+        }
+    }
+
+    // Tab switching.
     for (int index = 0; index < 3; ++index) {
         const RECT tab = TabRect(index);
         if (::PtInRect(&tab, POINT{x, y})) {
@@ -1512,55 +1400,6 @@ void App::OnLButtonDown(int x, int y, bool ctrl, bool shift) {
     ui::ListWidget& list = tab_ == Tab::Windows ? windowsList_ : targetsList_;
     ApplyListAction(list.OnLButtonDown(x, y, ctrl, shift), tab_ == Tab::Windows);
     InvalidateAll();
-}
-
-void App::OnRButtonDown(int x, int y) {
-    if (tab_ != Tab::Windows) {
-        return;
-    }
-    const int row = windowsList_.IndexAt(x, y);
-    if (row < 0) {
-        return;
-    }
-    const HWND sample = reinterpret_cast<HWND>(windowsList_.DataAt(row));
-    if (sample == nullptr) {
-        return;
-    }
-
-    // Count the visible windows of the same process that are not tracked yet,
-    // so the menu can show how many would be attached.
-    DWORD pid = 0;
-    ::GetWindowThreadProcessId(sample, &pid);
-    size_t count = 0;
-    for (const gf::WindowInfo& window : windowEnumerator_.windows()) {
-        if (window.pid == pid && window.hwnd != nullptr && sessions_.IndexOf(window.hwnd) < 0) {
-            ++count;
-        }
-    }
-    if (count == 0) {
-        SetStatus(L"NO ATTACHABLE WINDOWS IN THIS PROCESS", true);
-        return;
-    }
-
-    HMENU menu = ::CreatePopupMenu();
-    if (menu == nullptr) {
-        return;
-    }
-    wchar_t label[128] = {};
-    swprintf_s(label, L"Attach all %zu window(s) of this process", count);
-    ::AppendMenuW(menu, MF_STRING, ID_MENU_ATTACH_PROCESS, label);
-
-    POINT point = {x, y};
-    ::ClientToScreen(hwnd_, &point);
-    ::SetForegroundWindow(hwnd_);
-    const int command = ::TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, point.x, point.y, 0,
-                                         hwnd_, nullptr);
-    ::DestroyMenu(menu);
-    ::PostMessageW(hwnd_, WM_NULL, 0, 0);
-
-    if (command == ID_MENU_ATTACH_PROCESS) {
-        AttachProcessWindows(sample);
-    }
 }
 
 void App::OnLButtonDblClk(int x, int y) {
@@ -1631,6 +1470,14 @@ void App::OnKeyDown(int virtualKey) {
         return;
     }
 
+    if (virtualKey == VK_TAB) {
+        const bool back = (::GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        const int current = tab_ == Tab::Targets ? 0 : (tab_ == Tab::Windows ? 1 : 2);
+        const int next = (current + (back ? 2 : 1)) % 3;
+        SelectTab(next == 0 ? Tab::Targets : (next == 1 ? Tab::Windows : Tab::Settings));
+        return;
+    }
+
     if (virtualKey == VK_LEFT || virtualKey == VK_RIGHT) {
         SelectTab(virtualKey == VK_LEFT ? Tab::Targets : Tab::Windows);
         return;
@@ -1687,13 +1534,55 @@ void App::OnVScroll(int code, int position) {
     InvalidateAll();
 }
 
-void App::SetSelected(int index) {
-    selected_ = index;
-    targetsList_.Select(index);
-    if (tab_ == Tab::Targets) {
-        InvalidateAll();
+void App::OnButtonHover(HWND button, bool hovered) {
+    const int id = hovered ? ::GetDlgCtrlID(button) : 0;
+    if (id == hoveredButton_) {
+        return;
     }
+    if (hovered) {
+        TRACKMOUSEEVENT track = {};
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE;
+        track.hwndTrack = button;
+        ::TrackMouseEvent(&track);
+    }
+    hoveredButton_ = id;
+    ::InvalidateRect(button, nullptr, TRUE);
 }
+
+LRESULT CALLBACK App::ButtonSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam,
+                                         UINT_PTR, DWORD_PTR ref) {
+    auto* self = reinterpret_cast<App*>(ref);
+    switch (message) {
+        case WM_MOUSEMOVE:
+            if (self != nullptr) {
+                self->OnButtonHover(hwnd, true);
+                self->RelayTooltip(hwnd, message, wParam, lParam);
+            }
+            break;
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+            if (self != nullptr) {
+                self->RelayTooltip(hwnd, message, wParam, lParam);
+            }
+            break;
+        case WM_MOUSELEAVE:
+            if (self != nullptr) {
+                self->OnButtonHover(hwnd, false);
+            }
+            break;
+        case WM_SETCURSOR:
+            ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        default:
+            break;
+    }
+    return ::DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
+// ---------------------------------------------------------------------------
+// Commands, hotkeys, tray
+// ---------------------------------------------------------------------------
 
 void App::OnCommand(int id) {
     switch (id) {
@@ -1808,6 +1697,9 @@ void App::OnCommand(int id) {
         case ID_TRAY_RESTORE_ALL:
             RestoreAll();
             break;
+        case ID_TRAY_LOG:
+            OpenLogFolder();
+            break;
         default:
             break;
     }
@@ -1829,16 +1721,75 @@ void App::OnTray(LPARAM lParam) {
                 break;
             }
             ::AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"Show GhostFrame");
+
+            const size_t count = sessions_.Count();
+            if (count > 0) {
+                HMENU targets = ::CreatePopupMenu();
+                for (size_t i = 0; i < count; ++i) {
+                    const gf::Session& session = sessions_.At(i);
+                    HMENU sub = ::CreatePopupMenu();
+                    if (sub == nullptr) {
+                        continue;
+                    }
+                    const UINT_PTR base = ID_TRAY_TARGET_BASE + i * ID_TRAY_TARGET_STRIDE;
+                    ::AppendMenuW(sub, MF_STRING, base + ID_TRAY_TARGET_TOGGLE,
+                                  session.hidden() ? L"Show (lift exclusion)"
+                                                   : L"Hide (exclude from capture)");
+                    ::AppendMenuW(sub, MF_STRING, base + ID_TRAY_TARGET_RESTORE,
+                                  L"Restore window");
+                    ::AppendMenuW(sub, MF_STRING, base + ID_TRAY_TARGET_CLOSE, L"Close window");
+
+                    std::wstring label = session.title.empty() ? L"(untitled)" : session.title;
+                    if (label.size() > 48) {
+                        label.resize(48);
+                        label += L"…";
+                    }
+                    ::AppendMenuW(targets, MF_POPUP, reinterpret_cast<UINT_PTR>(sub),
+                                  label.c_str());
+                }
+                ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(targets), L"Targets");
+            }
+
             ::AppendMenuW(menu, MF_STRING, ID_TRAY_RESTORE_ALL, L"Restore all targets");
             ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            ::AppendMenuW(menu, MF_STRING, ID_TRAY_LOG, L"Open log folder");
             ::AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"Exit");
 
             POINT point = {};
             ::GetCursorPos(&point);
             ::SetForegroundWindow(hwnd_);
-            ::TrackPopupMenu(menu, TPM_RIGHTBUTTON, point.x, point.y, 0, hwnd_, nullptr);
+            const int command = ::TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, point.x,
+                                                 point.y, 0, hwnd_, nullptr);
             ::DestroyMenu(menu);
             ::PostMessageW(hwnd_, WM_NULL, 0, 0);
+
+            if (command == ID_TRAY_SHOW) {
+                ShowUi(true);
+            } else if (command == ID_TRAY_RESTORE_ALL) {
+                RestoreAll();
+            } else if (command == ID_TRAY_LOG) {
+                OpenLogFolder();
+            } else if (command == ID_TRAY_EXIT) {
+                ::PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+            } else if (command >= ID_TRAY_TARGET_BASE) {
+                const int offset = command - ID_TRAY_TARGET_BASE;
+                const size_t index = static_cast<size_t>(offset / ID_TRAY_TARGET_STRIDE);
+                const int action = offset % ID_TRAY_TARGET_STRIDE;
+                if (index < sessions_.Count()) {
+                    if (action == ID_TRAY_TARGET_TOGGLE) {
+                        selected_ = static_cast<int>(index);
+                        ToggleStealth(static_cast<int>(index));
+                    } else if (action == ID_TRAY_TARGET_RESTORE) {
+                        const HWND target = sessions_.At(index).hwnd;
+                        if (::IsWindow(target)) {
+                            ::ShowWindow(target, SW_RESTORE);
+                        }
+                    } else if (action == ID_TRAY_TARGET_CLOSE) {
+                        selected_ = static_cast<int>(index);
+                        TargetClose();
+                    }
+                }
+            }
             break;
         }
         default:
@@ -1851,6 +1802,9 @@ void App::OnDpiChanged(UINT dpi, const RECT* suggested) {
     if (HWND search = ::GetDlgItem(hwnd_, ID_EDIT_SEARCH)) {
         ::SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
     }
+    if (tooltip_ != nullptr) {
+        ::SendMessageW(tooltip_, WM_SETFONT, reinterpret_cast<WPARAM>(theme_.small), TRUE);
+    }
     if (suggested != nullptr) {
         ::SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
                        suggested->right - suggested->left,
@@ -1860,9 +1814,9 @@ void App::OnDpiChanged(UINT dpi, const RECT* suggested) {
     ::InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
-void App::SelectTarget(int index) {
-    SetSelected(index);
-}
+// ---------------------------------------------------------------------------
+// Attach orchestration
+// ---------------------------------------------------------------------------
 
 void App::AttachForeground(bool hideAfter) {
     if (attachThread_ != nullptr) {
@@ -2084,6 +2038,7 @@ void App::OnAttachDone(LPARAM lParam) {
         swprintf_s(head, L"ATTACHED %d/%d — FAILED: ", attached, requested);
         text = std::wstring(head) + failedText;
         SetStatus(text, true);
+        ShowToast(L"SOME WINDOWS COULD NOT BE ATTACHED", true);
     }
 }
 
@@ -2196,161 +2151,6 @@ void App::RetryPendingCommand() {
     pendingCommand_.nextTry = ::GetTickCount64() + kSendRetryDelayMs;
 }
 
-std::vector<size_t> App::SelectedTargetIndices() const {
-    std::vector<size_t> indices;
-    for (int index : targetsList_.SelectedIndices()) {
-        if (index >= 0 && static_cast<size_t>(index) < sessions_.Count()) {
-            indices.push_back(static_cast<size_t>(index));
-        }
-    }
-    if (indices.empty() && SelectedValid()) {
-        indices.push_back(static_cast<size_t>(selected_));
-    }
-    return indices;
-}
-
-void App::ToggleStealth(int index) {
-    if (index < 0 || static_cast<size_t>(index) >= sessions_.Count()) {
-        AttachForeground(settings_.ui.hideOnAttach);
-        return;
-    }
-
-    const bool hide = !sessions_.At(static_cast<size_t>(index)).hidden();
-    std::wstring error;
-    const gf::SendOutcome outcome =
-        SendCommand(index, hide ? gf::Cmd::Hide : gf::Cmd::Show, error);
-
-    selected_ = index;
-    targetsList_.Select(index);
-    if (outcome == gf::SendOutcome::Ok) {
-        SetStatus(hide ? L"STEALTH ENGAGED — WINDOW EXCLUDED FROM CAPTURE"
-                       : L"CAPTURE EXCLUSION LIFTED");
-    } else if (outcome == gf::SendOutcome::Error) {
-        SetStatus(L"ERROR: " + error, true);
-    }
-    InvalidateAll();
-}
-
-void App::ToggleSelection() {
-    const std::vector<size_t> indices = SelectedTargetIndices();
-    if (indices.empty()) {
-        AttachForeground(settings_.ui.hideOnAttach);
-        return;
-    }
-    if (indices.size() == 1) {
-        ToggleStealth(static_cast<int>(indices.front()));
-        return;
-    }
-
-    // One direction for the whole selection: if anything is still visible, hide
-    // everything; otherwise lift the exclusion from everything.
-    bool anyVisible = false;
-    for (size_t index : indices) {
-        if (!sessions_.At(index).hidden()) {
-            anyVisible = true;
-            break;
-        }
-    }
-    const gf::Cmd cmd = anyVisible ? gf::Cmd::Hide : gf::Cmd::Show;
-    const gf::BatchSendResult result = sessions_.SendToMany(indices, cmd);
-
-    wchar_t status[192] = {};
-    if (result.error == 0 && result.timeout == 0) {
-        swprintf_s(status,
-                   cmd == gf::Cmd::Hide ? L"STEALTH ENGAGED — %d TARGETS"
-                                        : L"CAPTURE EXCLUSION LIFTED — %d TARGETS",
-                   result.ok);
-        SetStatus(status);
-    } else {
-        swprintf_s(status, L"%d/%zu %s — %d BUSY, %d FAILED", result.ok, indices.size(),
-                   cmd == gf::Cmd::Hide ? L"HIDDEN" : L"RESTORED", result.timeout, result.error);
-        SetStatus(status, true);
-    }
-    InvalidateAll();
-}
-
-void App::RestoreAll() {
-    pendingCommand_ = PendingCommand{};
-    sessions_.RestoreAll();
-    selected_ = -1;
-    BuildTargetRows();
-    SetStatus(L"ALL TARGETS RESTORED");
-    UpdateTray();
-    InvalidateAll();
-}
-
-void App::TargetShow(int command) {
-    const std::vector<size_t> indices = SelectedTargetIndices();
-    if (indices.empty()) {
-        SetStatus(L"NO TARGET SELECTED", true);
-        return;
-    }
-
-    int applied = 0;
-    for (size_t index : indices) {
-        const HWND target = sessions_.At(index).hwnd;
-        if (::IsWindow(target)) {
-            ::ShowWindow(target, command);
-            ++applied;
-        }
-    }
-
-    if (applied == 0) {
-        SetStatus(L"THE TARGET WINDOW IS GONE", true);
-        return;
-    }
-    const bool minimize = command == SW_MINIMIZE;
-    if (applied == 1) {
-        SetStatus(minimize ? L"TARGET MINIMIZED" : L"TARGET RESTORED");
-    } else {
-        wchar_t status[96] = {};
-        swprintf_s(status, minimize ? L"%d TARGETS MINIMIZED" : L"%d TARGETS RESTORED", applied);
-        SetStatus(status);
-    }
-}
-
-void App::TargetClose() {
-    const std::vector<size_t> indices = SelectedTargetIndices();
-    if (indices.empty()) {
-        SetStatus(L"NO TARGET SELECTED", true);
-        return;
-    }
-
-    for (size_t index : indices) {
-        const HWND target = sessions_.At(index).hwnd;
-        if (::IsWindow(target)) {
-            ::PostMessageW(target, WM_CLOSE, 0, 0);
-        }
-    }
-    RemoveSelected();
-    SetStatus(indices.size() > 1 ? L"CLOSE SIGNAL SENT TO SELECTED TARGETS"
-                                 : L"CLOSE SIGNAL SENT");
-}
-
-void App::RemoveSelected() {
-    std::vector<size_t> indices = SelectedTargetIndices();
-    if (indices.empty()) {
-        SetStatus(L"NO TARGET SELECTED", true);
-        return;
-    }
-
-    // Remove from the end so earlier indices stay valid while erasing.
-    std::sort(indices.begin(), indices.end());
-    for (size_t i = indices.size(); i > 0; --i) {
-        const gf::Session& session = sessions_.At(indices[i - 1]);
-        // The user removed this window on purpose: never auto-capture it again
-        // until its process recreates it.
-        autoGuard_.Suppress(session.pid, session.createTime, session.hwnd);
-        sessions_.Remove(indices[i - 1]);
-    }
-
-    selected_ = sessions_.Empty() ? -1 : 0;
-    BuildTargetRows();
-    targetsList_.Select(selected_);
-    UpdateTray();
-    InvalidateAll();
-}
-
 void App::ShowUi(bool show) {
     if (show) {
         ::ShowWindow(hwnd_, SW_SHOW);
@@ -2413,10 +2213,26 @@ void App::UpdateTray() {
     ::Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
+void App::OpenLogFolder() {
+    const std::wstring& dir = gf::LogDirectory();
+    if (dir.empty()) {
+        SetStatus(L"THE LOG IS NOT AVAILABLE", true);
+        return;
+    }
+    ::ShellExecuteW(hwnd_, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 void App::SetStatus(std::wstring text, bool error) {
     status_ = std::move(text);
     statusError_ = error;
     gf::LogLine(L"status: %s", status_.c_str());
+    InvalidateAll();
+}
+
+void App::ShowToast(std::wstring text, bool error) {
+    toast_ = std::move(text);
+    toastError_ = error;
+    toastUntil_ = ::GetTickCount64() + kToastDurationMs;
     InvalidateAll();
 }
 

@@ -24,9 +24,22 @@
 #define ID_TRAY_SHOW 1101
 #define ID_TRAY_RESTORE_ALL 1102
 #define ID_TRAY_EXIT 1103
+#define ID_TRAY_LOG 1104
+
+// Per-target tray entries: base + index * 3 + {toggle, restore, close}.
+#define ID_TRAY_TARGET_BASE 1300
+#define ID_TRAY_TARGET_STRIDE 3
+#define ID_TRAY_TARGET_TOGGLE 0
+#define ID_TRAY_TARGET_RESTORE 1
+#define ID_TRAY_TARGET_CLOSE 2
 
 // WINDOWS-tab context menu
 #define ID_MENU_ATTACH_PROCESS 1201
+
+// TARGETS-row action buttons (right edge of a row).
+#define ID_ROW_STEALTH 1401
+#define ID_ROW_MIN 1402
+#define ID_ROW_CLOSE 1403
 
 // SETTINGS tab
 #define ID_BTN_SET_RESET 1020

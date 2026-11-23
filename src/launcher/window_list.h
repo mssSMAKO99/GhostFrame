@@ -46,6 +46,10 @@ public:
     // Icon for an already tracked window, looked up through the same cache.
     HICON IconForWindow(HWND hwnd);
 
+    // Executable file name of the process owning `hwnd` (empty when it cannot be
+    // read).  Used to show the process next to a tracked target.
+    std::wstring ProcessNameForWindow(HWND hwnd);
+
     static const wchar_t* ArchLabel(Arch arch);
 
 private:
