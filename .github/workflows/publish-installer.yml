@@ -1,9 +1,10 @@
 name: Publish installer
 
 # Copies install.ps1 into the root of the profile site repository
-# (mssSMAKO99/msssmako99.github.io) so the short command works:
+# (mssSMAKO99/msssmako99.github.io) as `gf` (no extension) plus a descriptive
+# `install.ps1` alias, so the short command works:
 #
-#   irm https://mssSMAKO99.github.io/install.ps1 | iex
+#   irm https://mssSMAKO99.github.io/gf | iex
 #
 # The GitHub token that belongs to this repository cannot write to another
 # repository.  Add a repository secret named GF with a fine-grained personal
@@ -61,9 +62,9 @@ jobs:
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=install.ps1 was not published::Add a repository secret named GF with Contents: read and write on mssSMAKO99/msssmako99.github.io."
+            echo "::warning title=gf was not published::Add a repository secret named GF with Contents: read and write on mssSMAKO99/msssmako99.github.io."
             {
-              echo "### install.ps1 was not published"
+              echo "### gf was not published"
               echo
               echo "Add a repository secret named \`GF\` with a fine-grained PAT that has **Contents: read and write** on \`mssSMAKO99/msssmako99.github.io\`, then re-run this workflow."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -83,13 +84,14 @@ jobs:
         working-directory: profile
         run: |
           set -euo pipefail
+          cp ../install.ps1 gf
           cp ../install.ps1 install.ps1
-          if git diff --quiet -- install.ps1 && git diff --cached --quiet -- install.ps1; then
-            echo "install.ps1 is already up to date"
+          if git diff --quiet -- gf install.ps1 && git diff --cached --quiet -- gf install.ps1; then
+            echo "gf is already up to date"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add install.ps1
-          git commit -m "chore: publish install.ps1 from GhostFrame@${GITHUB_SHA::7}"
+          git add gf install.ps1
+          git commit -m "chore: publish GhostFrame installer (gf) from GhostFrame@${GITHUB_SHA::7}"
           git push origin HEAD:main

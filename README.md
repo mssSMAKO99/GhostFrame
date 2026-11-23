@@ -215,7 +215,7 @@ You can also open `GhostFrame.slnx` in Visual Studio and build the launcher proj
 On Windows 10/11 with PowerShell 5.1 or newer, one line is enough:
 
 ```powershell
-irm https://mssSMAKO99.github.io/install.ps1 | iex
+irm mssSMAKO99.github.io/gf | iex
 ```
 
 The script downloads the latest release from GitHub Releases, checks its SHA-256,
@@ -225,7 +225,7 @@ it. It never asks for administrator rights and never needs `-ExecutionPolicy Byp
 To verify before running anything, download `install.ps1`, read it and pass options:
 
 ```powershell
-.\install.ps1 -Version v2.0.0        # pin a release instead of latest
+.\install.ps1 -Version v2.1.0        # pin a release instead of latest
 .\install.ps1 -NoRun                 # install without starting it
 .\install.ps1 -InstallDir C:\Tools\GhostFrame
 .\install.ps1 -Uninstall             # stop it, remove program, shortcut and data

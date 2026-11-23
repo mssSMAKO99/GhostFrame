@@ -3,7 +3,7 @@
 #pragma once
 
 #define GF_VERSION_MAJOR 2
-#define GF_VERSION_MINOR 0
+#define GF_VERSION_MINOR 1
 #define GF_VERSION_PATCH 0
 #define GF_VERSION_BUILD 0
 

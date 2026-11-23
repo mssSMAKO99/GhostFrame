@@ -55,7 +55,7 @@ jobs:
           <body>
           <h1>GhostFrame</h1>
           <p>Window capture exclusion for Windows 10/11. Install from PowerShell:</p>
-          <pre>irm https://mssSMAKO99.github.io/install.ps1 | iex</pre>
+          <pre>irm mssSMAKO99.github.io/gf | iex</pre>
           <p>The binary lives on the <a href="https://github.com/mssSMAKO99/GhostFrame/releases">releases page</a>.</p>
           </body>
           </html>
