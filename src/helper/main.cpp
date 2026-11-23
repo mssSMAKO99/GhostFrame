@@ -105,10 +105,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     DWORD_PTR result = 0;
+    // Keep the whole helper inside the launcher's 3 s wait: 2 s synchronous
+    // attempt + 0.6 s asynchronous fallback + process startup leaves margin.
     const LRESULT sent = ::SendMessageTimeoutW(
         reinterpret_cast<HWND>(static_cast<ULONG_PTR>(hwndValue)), attachMessage,
         static_cast<WPARAM>(launcherPidValue), static_cast<LPARAM>(sessionIdValue),
-        SMTO_ABORTIFHUNG | SMTO_BLOCK, 5000, &result);
+        SMTO_ABORTIFHUNG | SMTO_BLOCK, 2000, &result);
 
     const DWORD sendError = ::GetLastError();
     ::UnhookWindowsHookEx(installed);

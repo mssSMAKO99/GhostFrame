@@ -11,9 +11,11 @@ constexpr DWORD kWdaExclude = 0x00000011;  // WDA_EXCLUDEFROMCAPTURE
 constexpr LONG_PTR kTaskbarMask = WS_EX_APPWINDOW | WS_EX_TOOLWINDOW;
 
 void FrameChanged(HWND hwnd) {
+    // Asynchronous flavor: a hung target UI thread must never block the agent
+    // worker while it refreshes the (taskbar) frame bits.
     ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-                       SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                   SWP_ASYNCWINDOWPOS | SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE |
+                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 
 }  // namespace
@@ -88,6 +90,13 @@ DWORD WindowState::SetHidden(bool on, Taskbar& taskbar) {
         return 0;
     }
 
+    // Changing the ex-style cross-thread sends messages to the target's UI
+    // thread and blocks while that thread is hung.  Skip this tick and leave
+    // the state alone; the next tick retries once the window responds again.
+    if (::IsHungAppWindow(root_)) {
+        return 0;
+    }
+
     DWORD error = 0;
 
     if (on) {
@@ -97,15 +106,20 @@ DWORD WindowState::SetHidden(bool on, Taskbar& taskbar) {
         } else {
             savedWda_ = 0;
         }
-        haveWda_ = true;
 
+        // 2.2: never apply a partial hide.  If the exclusion failed, leave the
+        // window exactly as it was instead of touching styles or the taskbar.
         if (!::SetWindowDisplayAffinity(root_, kWdaExclude)) {
-            error = ::GetLastError();
+            return ::GetLastError();
         }
+        haveWda_ = true;
 
         savedExStyle_ = ::GetWindowLongPtrW(root_, GWL_EXSTYLE);
         exStyleMask_ = kTaskbarMask;
         haveExStyle_ = true;
+        // APPWINDOW forces a taskbar button even when TOOLWINDOW is also set.
+        hadButton_ = (savedExStyle_ & WS_EX_TOOLWINDOW) == 0 ||
+                     (savedExStyle_ & WS_EX_APPWINDOW) != 0;
 
         LONG_PTR ex = savedExStyle_;
         LONG_PTR updated = (ex & ~static_cast<LONG_PTR>(WS_EX_APPWINDOW)) |
@@ -115,10 +129,14 @@ DWORD WindowState::SetHidden(bool on, Taskbar& taskbar) {
             ApplyFrame();
         }
 
-        if (!taskbar.DeleteTab(root_)) {
-            // Fallback for systems where the shell object is unavailable.
-            ::ShowWindow(root_, SW_HIDE);
-            ::ShowWindow(root_, SW_SHOWNOACTIVATE);
+        // 1.5: only remove a button that existed, and report a missing shell
+        // object as an error instead of hiding/showing the window.
+        if (hadButton_) {
+            if (taskbar.DeleteTab(root_)) {
+                tabRemoved_ = true;
+            } else if (error == 0) {
+                error = ERROR_NOT_READY;
+            }
         }
 
         hidden_ = true;
@@ -138,9 +156,13 @@ DWORD WindowState::SetHidden(bool on, Taskbar& taskbar) {
             }
         }
 
-        if (!taskbar.AddTab(root_)) {
-            ::ShowWindow(root_, SW_HIDE);
-            ::ShowWindow(root_, SW_SHOWNOACTIVATE);
+        // 1.5: restore the button only when the hide actually removed it.
+        if (tabRemoved_) {
+            if (taskbar.AddTab(root_)) {
+                tabRemoved_ = false;
+            } else if (error == 0) {
+                error = ERROR_NOT_READY;
+            }
         }
 
         hidden_ = false;
@@ -152,6 +174,12 @@ DWORD WindowState::SetHidden(bool on, Taskbar& taskbar) {
 DWORD WindowState::Enforce() {
     if (!root_ || !::IsWindow(root_)) {
         return ERROR_INVALID_WINDOW_HANDLE;
+    }
+
+    // Do not touch a window whose UI thread is hung: cross-thread style
+    // operations would block the worker.  Not an error, just a skipped tick.
+    if (::IsHungAppWindow(root_)) {
+        return 0;
     }
 
     DWORD error = 0;
@@ -181,6 +209,16 @@ DWORD WindowState::RestoreAll(Taskbar& taskbar) {
     if (hidden_) {
         error = SetHidden(false, taskbar);
     }
+
+    // Forget the saved state so the next hide re-reads the live values.
+    haveWda_ = false;
+    savedWda_ = 0;
+    haveExStyle_ = false;
+    savedExStyle_ = 0;
+    exStyleMask_ = 0;
+    hadButton_ = false;
+    tabRemoved_ = false;
+
     return error;
 }
 

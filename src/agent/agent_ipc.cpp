@@ -76,11 +76,27 @@ void AgentIpc::Close() {
     }
 }
 
+void AgentIpc::BeginWrite() {
+    if (state_) {
+        ::InterlockedIncrement(&state_->seq);  // odd while modified
+        ::MemoryBarrier();
+    }
+}
+
+void AgentIpc::EndWrite() {
+    if (state_) {
+        ::MemoryBarrier();
+        ::InterlockedIncrement(&state_->seq);  // even again, snapshot complete
+        Signal(changed_);
+    }
+}
+
 void AgentIpc::Publish(gf::Status status, LONG setFlags, LONG clearFlags,
                        DWORD wda, LONG error, LONG ackSeq) {
     if (!state_) {
         return;
     }
+    BeginWrite();
     state_->status = static_cast<LONG>(status);
     LONG flags = state_->flags;
     flags |= setFlags;
@@ -91,30 +107,25 @@ void AgentIpc::Publish(gf::Status status, LONG setFlags, LONG clearFlags,
     if (ackSeq >= 0) {
         state_->ackSeq = ackSeq;
     }
-    ::MemoryBarrier();
-    ::InterlockedIncrement(&state_->seq);
-    Signal(changed_);
+    EndWrite();
 }
 
-void AgentIpc::PublishAffinity(DWORD wda, LONG error) {
+void AgentIpc::PublishAffinity(DWORD wda) {
     if (!state_) {
         return;
     }
+    BeginWrite();
     state_->wda = static_cast<LONG>(wda);
-    state_->lastError = error;
-    ::MemoryBarrier();
-    ::InterlockedIncrement(&state_->seq);
-    Signal(changed_);
+    EndWrite();
 }
 
 void AgentIpc::Ack(LONG seq) {
     if (!state_) {
         return;
     }
+    BeginWrite();
     state_->ackSeq = seq;
-    ::MemoryBarrier();
-    ::InterlockedIncrement(&state_->seq);
-    Signal(changed_);
+    EndWrite();
 }
 
 }  // namespace gf::agent

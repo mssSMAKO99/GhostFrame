@@ -25,6 +25,12 @@ inline constexpr wchar_t kAttachMessageName[] = L"GhostFrame.Attach.v2";
 inline constexpr uint32_t kStateMagic = 0x33465347u;  // 'GSF3'
 inline constexpr uint32_t kStateVersion = 3u;
 
+// Sentinel the agent writes into `lastError` when a target process already has
+// the maximum number of tracked windows (the batch-attach limit).  It is far
+// outside the Win32 error range on purpose, so the launcher can map it to a
+// human-readable message instead of formatting it with FormatMessage.
+inline constexpr LONG kErrorTooManyTargets = 0x47465331;  // 'GFS1'
+
 enum class Cmd : LONG {
     None = 0,
     Hide = 1,
