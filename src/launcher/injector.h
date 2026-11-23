@@ -19,8 +19,6 @@ struct ProcessInfo {
     ULONGLONG createTime = 0;
     Arch arch = Arch::Other;
     DWORD integrity = 0;
-    bool accessible = false;
-    DWORD openError = 0;
 };
 
 bool DescribeProcess(DWORD pid, ProcessInfo& info, std::wstring& error);
@@ -44,9 +42,6 @@ public:
 
     // WH_GETMESSAGE hooks stay installed until the agent proves it attached.
     void ReleasePendingHook();
-
-    const std::wstring& payload_dir() const { return dir_; }
-    UINT attach_message() const { return message_; }
 
 private:
     bool Extract(int resourceId, const wchar_t* fileName, std::wstring& error);

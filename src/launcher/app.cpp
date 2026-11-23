@@ -129,8 +129,6 @@ App::InitResult App::Init(HINSTANCE instance, bool noSelfExclude) {
     controls.dwICC = ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
     ::InitCommonControlsEx(&controls);
 
-    ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-
     std::wstring error;
     if (!injector_.Initialize(error)) {
         gf::LogLine(L"payload preparation failed: %s", error.c_str());
@@ -269,8 +267,8 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_NCCALCSIZE:
-            // Drop the non-client frame of WS_THICKFRAME: the window stays
-            // borderless but can still be resized from its edges.
+            // Drop the non-client frame of WS_THICKFRAME: no title bar is
+            // drawn, but the window can still be resized from its edges.
             if (wParam == TRUE) {
                 return 0;
             }

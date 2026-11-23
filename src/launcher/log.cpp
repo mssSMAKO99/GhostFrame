@@ -119,8 +119,4 @@ void LogLine(const wchar_t* format, ...) {
     WriteRaw(line, length);
 }
 
-void LogWin32(const wchar_t* what, DWORD error) {
-    LogLine(L"%s failed: %s", what, Win32Message(error).c_str());
-}
-
 }  // namespace gf

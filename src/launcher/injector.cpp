@@ -10,6 +10,8 @@
 #include "log.h"
 #include "resource.h"
 
+#include "ghostframe/session_id.h"
+
 #ifndef IMAGE_FILE_MACHINE_ARM64EC
 #define IMAGE_FILE_MACHINE_ARM64EC 0xA641
 #endif
@@ -75,18 +77,6 @@ void DeletePayloadFile(const std::wstring& path) {
     // to unlink a read-only file.
     ::SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
     ::DeleteFileW(path.c_str());
-}
-
-uint32_t NewSessionId() {    FILETIME now = {};
-    ::GetSystemTimeAsFileTime(&now);
-    ULARGE_INTEGER value = {};
-    value.LowPart = now.dwLowDateTime;
-    value.HighPart = now.dwHighDateTime;
-
-    uint32_t id = static_cast<uint32_t>(value.QuadPart ^ (value.QuadPart >> 32));
-    id ^= ::GetCurrentProcessId() * 2654435761u;
-    id ^= ::GetTickCount();
-    return id != 0 ? id : 1;
 }
 
 DWORD IntegrityOf(HANDLE process) {
@@ -186,12 +176,10 @@ bool DescribeProcess(DWORD pid, ProcessInfo& info, std::wstring& error) {
 
     HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (process == nullptr) {
-        info.openError = ::GetLastError();
-        error = L"cannot open target process: " + Win32Message(info.openError);
+        const DWORD openError = ::GetLastError();
+        error = L"cannot open target process: " + Win32Message(openError);
         return false;
     }
-
-    info.accessible = true;
 
     FILETIME created = {};
     FILETIME exited = {};

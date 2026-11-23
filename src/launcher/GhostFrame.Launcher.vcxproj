@@ -97,20 +97,24 @@
     compiler runs.  Building them here also keeps a plain "build the launcher"
     working from a fresh clone, without a manual five-step dance.
 
-    The .res file is deleted so that a rebuilt payload always triggers a fresh
-    resource compile: MSBuild would otherwise only track resources.rc.
+    The nested builds get their own IntDir under obj\payload\...: the agent is
+    also a solution project, and sharing obj\GhostFrame.Agent\... would let a
+    parallel `msbuild GhostFrame.slnx /m` write the same .obj/.pdb as the
+    launcher's nested build.  The .res file is deleted so that a rebuilt payload
+    always triggers a fresh resource compile: MSBuild would otherwise only track
+    resources.rc.
   -->
   <Target Name="GF_BuildPayloads" BeforeTargets="ResourceCompile">
     <MakeDir Directories="$(GF_PayloadDir)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\agent\GhostFrame.Agent.vcxproj"
              Targets="Build"
-             Properties="Configuration=$(Configuration);Platform=x64;OutDir=$(GF_PayloadDir);SolutionDir=$(GF_SolutionDir)" />
+             Properties="Configuration=$(Configuration);Platform=x64;OutDir=$(GF_PayloadDir);IntDir=$(GF_BuildDir)obj\payload\GhostFrame.Agent\x64\$(Configuration)\;SolutionDir=$(GF_SolutionDir)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\agent\GhostFrame.Agent.vcxproj"
              Targets="Build"
-             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);SolutionDir=$(GF_SolutionDir)" />
+             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);IntDir=$(GF_BuildDir)obj\payload\GhostFrame.Agent\Win32\$(Configuration)\;SolutionDir=$(GF_SolutionDir)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\helper\GhostFrame.Helper.vcxproj"
              Targets="Build"
-             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);SolutionDir=$(GF_SolutionDir)" />
+             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);IntDir=$(GF_BuildDir)obj\payload\GhostFrame.Helper\Win32\$(Configuration)\;SolutionDir=$(GF_SolutionDir)" />
     <Delete Files="$(IntDir)resources.res" />
   </Target>
 

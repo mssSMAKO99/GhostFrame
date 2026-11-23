@@ -27,7 +27,6 @@ struct Session {
     LONG lastError = 0;
     LONG lastSeq = -1;
 
-    bool attached() const { return (flags & FlagAttached) != 0; }
     bool hidden() const { return (flags & FlagHidden) != 0; }
     bool errored() const { return status == Status::Error; }
 };

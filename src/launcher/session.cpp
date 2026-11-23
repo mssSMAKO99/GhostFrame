@@ -7,22 +7,11 @@
 
 #include "log.h"
 
+#include "ghostframe/session_id.h"
+
 namespace gf {
 
 namespace {
-
-uint32_t NewSessionId() {
-    FILETIME now = {};
-    ::GetSystemTimeAsFileTime(&now);
-    ULARGE_INTEGER value = {};
-    value.LowPart = now.dwLowDateTime;
-    value.HighPart = now.dwHighDateTime;
-
-    uint32_t id = static_cast<uint32_t>(value.QuadPart ^ (value.QuadPart >> 32));
-    id ^= ::GetCurrentProcessId() * 2654435761u;
-    id ^= ::GetTickCount();
-    return id != 0 ? id : 1;
-}
 
 bool ProcessMatches(DWORD pid, ULONGLONG createTime) {
     HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);

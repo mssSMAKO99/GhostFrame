@@ -12,7 +12,6 @@ void LogShutdown();
 // LogInit or after LogShutdown.
 const std::wstring& LogDirectory();
 void LogLine(const wchar_t* format, ...);
-void LogWin32(const wchar_t* what, DWORD error);
 
 std::wstring FormatString(const wchar_t* format, ...);
 std::wstring Win32Message(DWORD error);

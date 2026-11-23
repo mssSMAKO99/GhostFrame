@@ -11,5 +11,15 @@
 #define GF_VERSION_FILE \
     GF_VERSION_MAJOR, GF_VERSION_MINOR, GF_VERSION_PATCH, GF_VERSION_BUILD
 
-#define GF_VERSION_STRING L"2.0.0"
-#define GF_VERSION_STRING_A "2.0.0"
+// Stringized forms so the numbers above stay the single source of truth.
+#define GF_VERSION_STRINGIZE_(value) #value
+#define GF_VERSION_STRINGIZE(value) GF_VERSION_STRINGIZE_(value)
+
+#define GF_VERSION_STRING_A \
+    GF_VERSION_STRINGIZE(GF_VERSION_MAJOR) "." GF_VERSION_STRINGIZE(GF_VERSION_MINOR) "." \
+    GF_VERSION_STRINGIZE(GF_VERSION_PATCH)
+
+// "a.b.c.d", the form the resource compiler wants in StringFileInfo.
+#define GF_VERSION_STRING4_A GF_VERSION_STRING_A "." GF_VERSION_STRINGIZE(GF_VERSION_BUILD)
+
+#define GF_VERSION_STRING L"" GF_VERSION_STRING_A

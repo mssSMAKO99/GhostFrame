@@ -43,7 +43,6 @@ public:
     void Init(HWND root) { root_ = root; }
 
     bool IsAlive() const { return root_ && ::IsWindow(root_) != FALSE; }
-    bool IsHidden() const { return hidden_; }
 
     DWORD SetHidden(bool on, Taskbar& taskbar);
     DWORD RestoreAll(Taskbar& taskbar);

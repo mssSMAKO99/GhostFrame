@@ -181,9 +181,9 @@ read-only or redirected profiles).
 ## Build
 
 ```powershell
-.\build.ps1                 # Release -> dist\GhostFrame.exe (+ test binaries)
+.\build.ps1                 # Release -> dist\GhostFrame.exe
 .\build.ps1 -Configuration Debug
-.\build.ps1 -SkipTests
+.\build.ps1 -SkipTests      # only the product, no test binaries
 ```
 
 The script locates MSBuild through `vswhere` and works with Visual Studio 2022 (v143) and
@@ -191,7 +191,19 @@ Visual Studio 2026 (v145); the toolset is selected automatically by `msbuild/Too
 The launcher project builds the x64/x86 agent and the 32-bit helper itself and embeds them
 as `RCDATA`, so there is no manual five-step build order any more.
 
+`dist\` holds only `GhostFrame.exe`. The test binaries stay next to the build output, in
+`build\out\x64\<Configuration>\`.
+
 You can also open `GhostFrame.slnx` in Visual Studio and build the launcher project.
+
+## Install and uninstall
+
+GhostFrame is portable: there is nothing to install. Copy `dist\GhostFrame.exe` anywhere
+and run it. The only thing it writes outside that folder is `%LOCALAPPDATA%\GhostFrame\`
+(`settings.json`, the extracted payloads and the log).
+
+To remove it: exit GhostFrame (so every target is restored), delete `GhostFrame.exe` and
+`%LOCALAPPDATA%\GhostFrame\`. No registry keys, services or scheduled tasks are created.
 
 ## Tests
 
@@ -245,7 +257,12 @@ docs/AUDIT-v1.md             review of the pre-rewrite version (historical)
 ## Limitations and risk notes
 
 - Elevated or protected targets cannot be hooked from a non-elevated launcher; the UI says
-  so instead of pretending to work.
+  so instead of pretending to work (they are marked `ADMIN` in the window list).
+- UWP apps are hosted by `ApplicationFrameHost.exe`, so the visible window belongs to a
+  process that does not own the real content; these windows are marked `UWP` and cannot be
+  excluded from capture.
+- The window list enumerates the current virtual desktop only; a window on another desktop
+  is not shown until you switch to it.
 - ARM64 targets are not supported (the launcher is x64).
 - Anti-cheat and EDR products may flag any `SetWindowsHookEx` injection; that is expected.
 - The tool changes windows of other processes. Use it on applications you own or have
