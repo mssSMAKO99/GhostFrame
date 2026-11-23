@@ -16,11 +16,17 @@
 #define ID_BTN_CLOSE 1006
 #define ID_BTN_HIDE_UI 1007
 #define ID_BTN_EXIT 1008
+#define ID_BTN_REFRESH 1009
+#define ID_BTN_ATTACH 1010
+#define ID_EDIT_SEARCH 1011
 
 // Tray menu
 #define ID_TRAY_SHOW 1101
 #define ID_TRAY_RESTORE_ALL 1102
 #define ID_TRAY_EXIT 1103
+
+// WINDOWS-tab context menu
+#define ID_MENU_ATTACH_PROCESS 1201
 
 // Timers
 #define ID_TIMER_REFRESH 1

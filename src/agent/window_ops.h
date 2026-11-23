@@ -20,8 +20,9 @@ public:
     void Init();
     void Shutdown();
 
-    // Returns false when the shell object is unavailable and the caller should
-    // fall back to a style refresh.
+    // Returns false when the shell object is unavailable.  Callers must treat
+    // that as an error and leave the window itself untouched: hiding/showing
+    // the window as a fallback steals focus and can pause games.
     bool DeleteTab(HWND hwnd);
     bool AddTab(HWND hwnd);
 
@@ -65,6 +66,14 @@ private:
     bool haveExStyle_ = false;
     LONG_PTR savedExStyle_ = 0;
     LONG_PTR exStyleMask_ = 0;
+
+    // Whether the window actually owned a taskbar button before we hid it.
+    // Tool windows never do, so DeleteTab/AddTab are skipped for them.
+    bool hadButton_ = false;
+
+    // Whether DeleteTab succeeded, so AddTab is only called when something was
+    // actually removed.
+    bool tabRemoved_ = false;
 };
 
 }  // namespace gf::agent

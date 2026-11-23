@@ -56,6 +56,14 @@ itself afterwards, so the extracted payload files can be removed.
   (no window hide/show, so games do not lose focus or pause).
 - **Window frame is never modified** — only the capture affinity and the taskbar state.
 - **Multiple targets** in one session list; per-target state, `Restore all`.
+- **Batch capture**: pick several windows at once with `Ctrl`/`Shift` on the WINDOWS
+  tab (or right-click a process to take all of its visible windows) and attach them in
+  one action, with progress and a per-window summary. Stealth toggle, minimize, restore,
+  close and remove apply to the whole selection.
+- **Window picker** on the WINDOWS tab: every top-level window with its icon, process,
+  PID, architecture and elevation badge, plus a filter box; double-click or the
+  `ATTACH SELECTED (N)` button to start tracking. The target list is scrollable and
+  has no fixed row limit.
 - **Self-healing**: restore on explicit request, on launcher exit, on crash/kill (lease
   watchdog), and when the target window disappears.
 - **Honest status**: every command is acknowledged over shared memory; failures carry the
@@ -74,8 +82,11 @@ itself afterwards, so the extracted payload files can be removed.
 | `Ctrl + Shift + Up` | Restore the selected target |
 | `Ctrl + Shift + Q` | Ask the selected target to close |
 
-Hotkeys act on the selected list entry. With no entries, `H` captures the current
-foreground window and starts tracking it.
+Hotkeys act on the whole selection in the `TARGETS` list (a plain click selects one;
+`Ctrl`/`Shift` extends the selection, `Ctrl+A` selects all). With no selection, `H`
+captures the current foreground window and starts tracking it. `Del` removes the selected
+targets (uninstall + forget), and `Ctrl + Shift + Up/Down` minimize/restore all selected
+ones.
 
 ## Command line
 
@@ -113,7 +124,7 @@ You can also open `GhostFrame.slnx` in Visual Studio and build the launcher proj
 
 | Test | What it covers | Where it runs |
 | :--- | :--- | :--- |
-| `GfAgentHost.exe <agent.dll>` | Agent in-process: attach, hide/show, guard re-assertion, taskbar styles, untouched window frame, bootstrap de-duplication, attach→command handshake, lease watchdog, self-detach (36 assertions) | Everywhere, no injection needed |
+| `GfAgentHost.exe <agent.dll>` | Agent in-process: attach, hide/show, guard re-assertion, taskbar styles, untouched window frame, bootstrap de-duplication, attach→command handshake, batch attach (10 windows of one process), lease watchdog, self-detach (48 assertions) | Everywhere, no injection needed |
 | `GfTestTarget.exe` + `GhostFrame.exe --selftest` | Full pipeline including cross-process injection | Normal desktop; blocked by some sandboxes/EDR |
 
 ```powershell

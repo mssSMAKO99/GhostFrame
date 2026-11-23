@@ -28,7 +28,11 @@
 
 namespace {
 
-constexpr int kMaxSessions = 8;
+// One worker thread (and one registry slot) per tracked window.  Batch attach
+// can take several windows of the same process at once, so the old limit of 8
+// was reached by a single application; 32 covers realistic batches.  Exceeding
+// it rejects only the extra window with a clear error, never the whole batch.
+constexpr int kMaxWorkers = 32;
 constexpr DWORD kGuardTickMs = 250;
 
 // Active sessions, keyed by (launcher pid, session id).  The launcher retries
@@ -44,13 +48,15 @@ struct SessionKey {
 };
 
 SRWLOCK g_sessionLock = SRWLOCK_INIT;
-SessionKey g_sessions[kMaxSessions] = {};
+SessionKey g_sessions[kMaxWorkers] = {};
 
-bool RegisterSession(DWORD launcherPid, uint32_t sessionId) {
-    bool registered = false;
+enum class RegisterResult { Ok, Duplicate, Full };
+
+RegisterResult RegisterSession(DWORD launcherPid, uint32_t sessionId) {
+    RegisterResult result = RegisterResult::Full;
     ::AcquireSRWLockExclusive(&g_sessionLock);
     int freeSlot = -1;
-    for (int i = 0; i < kMaxSessions; ++i) {
+    for (int i = 0; i < kMaxWorkers; ++i) {
         if (g_sessions[i].sessionId == 0) {
             if (freeSlot < 0) {
                 freeSlot = i;
@@ -58,21 +64,21 @@ bool RegisterSession(DWORD launcherPid, uint32_t sessionId) {
         } else if (g_sessions[i].launcherPid == launcherPid &&
                    g_sessions[i].sessionId == sessionId) {
             ::ReleaseSRWLockExclusive(&g_sessionLock);
-            return false;  // duplicate bootstrap, not an error
+            return RegisterResult::Duplicate;  // duplicate bootstrap, not an error
         }
     }
     if (freeSlot >= 0) {
         g_sessions[freeSlot].launcherPid = launcherPid;
         g_sessions[freeSlot].sessionId = sessionId;
-        registered = true;
+        result = RegisterResult::Ok;
     }
     ::ReleaseSRWLockExclusive(&g_sessionLock);
-    return registered;
+    return result;
 }
 
 void UnregisterSession(DWORD launcherPid, uint32_t sessionId) {
     ::AcquireSRWLockExclusive(&g_sessionLock);
-    for (int i = 0; i < kMaxSessions; ++i) {
+    for (int i = 0; i < kMaxWorkers; ++i) {
         if (g_sessions[i].launcherPid == launcherPid &&
             g_sessions[i].sessionId == sessionId) {
             g_sessions[i] = SessionKey{};
@@ -94,8 +100,9 @@ void Trace(const wchar_t* format, ...) {
     ::GetTempPathW(MAX_PATH, temp);
     const std::wstring path = std::wstring(temp) + L"GhostFrame.agent.log";
 
-    HANDLE file = ::CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
-                                OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE file = ::CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         return;
     }
@@ -126,6 +133,7 @@ struct WorkerContext {
 };
 
 bool StartWorker(HWND hwnd, DWORD launcherPid, uint32_t sessionId);
+void ReportTooManyTargets(uint32_t sessionId);
 bool ApplyCommand(gf::agent::WindowState& window, gf::agent::Taskbar& taskbar,
                   gf::agent::AgentIpc& ipc, gf::Cmd cmd, LONG seq);
 void RunWorker(const WorkerContext& context);
@@ -152,6 +160,18 @@ extern "C" LRESULT CALLBACK GfAgentHookProc(int nCode, WPARAM wParam, LPARAM lPa
 
 namespace {
 
+// Publishes a clear "too many targets" failure into the rejected session's
+// state block, so the launcher can report the real reason instead of a generic
+// "the target refused the agent".  The launcher keeps the block alive while it
+// waits for the attach handshake.
+void ReportTooManyTargets(uint32_t sessionId) {
+    gf::agent::AgentIpc ipc;
+    if (!ipc.Open(::GetCurrentProcessId(), sessionId)) {
+        return;
+    }
+    ipc.Publish(gf::Status::Error, 0, gf::FlagAttached, 0, gf::kErrorTooManyTargets, -1);
+}
+
 bool StartWorker(HWND hwnd, DWORD launcherPid, uint32_t sessionId) {
     if (hwnd == nullptr || launcherPid == 0 || sessionId == 0) {
         GF_TRACE(L"start: bad arguments");
@@ -161,11 +181,21 @@ bool StartWorker(HWND hwnd, DWORD launcherPid, uint32_t sessionId) {
         GF_TRACE(L"start: launcher pid equals target pid");
         return false;
     }
-    if (!RegisterSession(launcherPid, sessionId)) {
-        // Either a duplicate bootstrap for this session or the process has no
-        // free worker slot; both are rejected without touching existing state.
-        GF_TRACE(L"start: duplicate session or session limit reached");
+
+    switch (RegisterSession(launcherPid, sessionId)) {
+    case RegisterResult::Duplicate:
+        // A duplicate bootstrap for this session: reject it silently, without
+        // touching the existing worker or its saved state.
+        GF_TRACE(L"start: duplicate session");
         return false;
+    case RegisterResult::Full:
+        // The process already has the maximum number of tracked windows.  Fail
+        // only this window with a precise error; the other attaches continue.
+        GF_TRACE(L"start: worker limit reached");
+        ReportTooManyTargets(sessionId);
+        return false;
+    case RegisterResult::Ok:
+        break;
     }
 
     HWND root = ::GetAncestor(hwnd, GA_ROOT);
@@ -218,18 +248,31 @@ bool ApplyCommand(gf::agent::WindowState& window, gf::agent::Taskbar& taskbar,
     switch (cmd) {
     case gf::Cmd::Hide:
         error = window.SetHidden(true, taskbar);
-        setFlags = gf::FlagHidden;
-        status = error != 0 ? gf::Status::Error : gf::Status::Hidden;
+        if (error == 0) {
+            setFlags = gf::FlagHidden;
+            status = gf::Status::Hidden;
+        } else {
+            // 2.2: a failed hide must not be reported as hidden.
+            status = gf::Status::Error;
+        }
         break;
     case gf::Cmd::Show:
         error = window.SetHidden(false, taskbar);
-        clearFlags = gf::FlagHidden;
-        status = error != 0 ? gf::Status::Error : gf::Status::Visible;
+        if (error == 0) {
+            clearFlags = gf::FlagHidden;
+            status = gf::Status::Visible;
+        } else {
+            status = gf::Status::Error;
+        }
         break;
     case gf::Cmd::RestoreAll:
         error = window.RestoreAll(taskbar);
-        clearFlags = gf::FlagHidden;
-        status = error != 0 ? gf::Status::Error : gf::Status::Visible;
+        if (error == 0) {
+            clearFlags = gf::FlagHidden;
+            status = gf::Status::Visible;
+        } else {
+            status = gf::Status::Error;
+        }
         break;
     case gf::Cmd::Ping:
         ipc.Ack(seq);
@@ -272,7 +315,6 @@ void RunWorker(const WorkerContext& context) {
     // the worker would consider it applied (the command would be lost).
     LONG lastSeq = ipc.state()->cmdSeq;
     LONG lastWda = static_cast<LONG>(window.CurrentWda());
-    LONG lastError = 0;
 
     ipc.Publish(gf::Status::Attached, gf::FlagAttached, gf::FlagHidden | gf::FlagLeaseLost,
                 window.CurrentWda(), 0, -1);
@@ -302,7 +344,6 @@ void RunWorker(const WorkerContext& context) {
                     break;
                 }
                 lastWda = static_cast<LONG>(window.CurrentWda());
-                lastError = 0;
             }
         }
 
@@ -312,12 +353,11 @@ void RunWorker(const WorkerContext& context) {
             break;
         }
 
-        const DWORD error = window.Enforce();
+        window.Enforce();
         const DWORD wda = window.CurrentWda();
-        if (static_cast<LONG>(wda) != lastWda || static_cast<LONG>(error) != lastError) {
-            ipc.PublishAffinity(wda, static_cast<LONG>(error));
+        if (static_cast<LONG>(wda) != lastWda) {
+            ipc.PublishAffinity(wda);
             lastWda = static_cast<LONG>(wda);
-            lastError = static_cast<LONG>(error);
         }
     }
 
@@ -329,7 +369,7 @@ void RunWorker(const WorkerContext& context) {
 
     taskbar.Shutdown();
     ::CloseHandle(lease);
-    ipc.Close();
+    // `ipc` is closed by its destructor (RAII), including on early returns.
 }
 
 DWORD WINAPI WorkerThread(LPVOID parameter) {

@@ -1,7 +1,9 @@
 #include "injector.h"
 
+#include <bcrypt.h>
 #include <shlobj.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <vector>
 
@@ -46,6 +48,33 @@ bool EnsureDirectory(const std::wstring& path) {
     }
     const DWORD attributes = ::GetFileAttributesW(path.c_str());
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+bool Sha256(const void* data, size_t size, BYTE out[32]) {
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (::BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) {
+        return false;
+    }
+
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    bool ok = false;
+    if (::BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0) {
+        const PUCHAR bytes = static_cast<PUCHAR>(const_cast<void*>(data));
+        if (::BCryptHashData(hash, bytes, static_cast<ULONG>(size), 0) >= 0 &&
+            ::BCryptFinishHash(hash, out, 32, 0) >= 0) {
+            ok = true;
+        }
+        ::BCryptDestroyHash(hash);
+    }
+    ::BCryptCloseAlgorithmProvider(algorithm, 0);
+    return ok;
+}
+
+void DeletePayloadFile(const std::wstring& path) {
+    // Payloads are marked read-only after verification, and DeleteFileW refuses
+    // to unlink a read-only file.
+    ::SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+    ::DeleteFileW(path.c_str());
 }
 
 uint32_t NewSessionId() {    FILETIME now = {};
@@ -102,6 +131,10 @@ Arch ArchitectureOf(HANDLE process) {
             }
             if (processMachine == IMAGE_FILE_MACHINE_AMD64) {
                 return Arch::X64;
+            }
+            if (processMachine == IMAGE_FILE_MACHINE_ARM64 ||
+                processMachine == IMAGE_FILE_MACHINE_ARM64EC) {
+                return Arch::Arm64;
             }
             if (processMachine == IMAGE_FILE_MACHINE_UNKNOWN) {
                 switch (nativeMachine) {
@@ -272,9 +305,9 @@ void Injector::Shutdown() {
 
     // Best effort: agents that are still alive keep their copy mapped, in which
     // case the folder is removed by the sweep on the next start.
-    ::DeleteFileW((dir_ + L"\\GhostFrameAgent64.dll").c_str());
-    ::DeleteFileW((dir_ + L"\\GhostFrameAgent32.dll").c_str());
-    ::DeleteFileW((dir_ + L"\\GhostFrameHelper32.exe").c_str());
+    DeletePayloadFile(dir_ + L"\\GhostFrameAgent64.dll");
+    DeletePayloadFile(dir_ + L"\\GhostFrameAgent32.dll");
+    DeletePayloadFile(dir_ + L"\\GhostFrameHelper32.exe");
     if (::RemoveDirectoryW(dir_.c_str())) {
         LogLine(L"payload folder removed");
     } else {
@@ -309,6 +342,12 @@ void Injector::SweepStalePayloads() {
             ::CloseHandle(process);
             continue;
         }
+        // Only a pid that cannot exist any more is stale.  ACCESS_DENIED means
+        // the process is alive but out of reach (e.g. elevated) and its payload
+        // must be left alone.
+        if (::GetLastError() != ERROR_INVALID_PARAMETER) {
+            continue;
+        }
 
         const std::wstring folder = baseDir_ + L"\\" + entry.cFileName;
         WIN32_FIND_DATAW inner = {};
@@ -316,7 +355,10 @@ void Injector::SweepStalePayloads() {
         if (innerFind != INVALID_HANDLE_VALUE) {
             do {
                 if ((inner.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-                    ::DeleteFileW((folder + L"\\" + inner.cFileName).c_str());
+                    const std::wstring innerPath = folder + L"\\" + inner.cFileName;
+                    // Payloads are read-only; DeleteFileW would fail on them.
+                    ::SetFileAttributesW(innerPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                    ::DeleteFileW(innerPath.c_str());
                 }
             } while (::FindNextFileW(innerFind, &inner));
             ::FindClose(innerFind);
@@ -342,6 +384,12 @@ bool Injector::Extract(int resourceId, const wchar_t* fileName, std::wstring& er
         return false;
     }
 
+    BYTE expected[32] = {};
+    if (!Sha256(bytes, size, expected)) {
+        error = FormatString(L"cannot hash embedded payload %s", fileName);
+        return false;
+    }
+
     const std::wstring path = dir_ + L"\\" + fileName;
     HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                                 FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -356,6 +404,49 @@ bool Injector::Extract(int resourceId, const wchar_t* fileName, std::wstring& er
 
     if (!ok || written != size) {
         error = L"cannot write " + path + L": " + Win32Message(::GetLastError());
+        ::DeleteFileW(path.c_str());
+        return false;
+    }
+
+    // Read the copy back and compare its size and SHA-256 with the embedded
+    // resource.  This catches truncated writes and accidental corruption.
+    bool verified = false;
+    HANDLE check = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (check != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER actualSize = {};
+        if (::GetFileSizeEx(check, &actualSize) && actualSize.QuadPart == size) {
+            std::vector<BYTE> readback(size);
+            DWORD total = 0;
+            bool readOk = true;
+            while (total < size) {
+                DWORD chunk = 0;
+                if (!::ReadFile(check, readback.data() + total, size - total, &chunk, nullptr) ||
+                    chunk == 0) {
+                    readOk = false;
+                    break;
+                }
+                total += chunk;
+            }
+            BYTE actual[32] = {};
+            verified = readOk && total == size && Sha256(readback.data(), size, actual) &&
+                       ::memcmp(expected, actual, sizeof(expected)) == 0;
+        }
+        ::CloseHandle(check);
+    }
+
+    if (!verified) {
+        error = FormatString(L"embedded payload %s failed the integrity check", fileName);
+        ::DeleteFileW(path.c_str());
+        return false;
+    }
+
+    // The payload folder is user-writable, so another process running as the
+    // same user could still swap the file between extraction and injection
+    // (TOCTOU).  Read-only plus verification protects against accidents, not
+    // against a hostile same-user process; the account itself is the boundary.
+    if (!::SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_READONLY)) {
+        error = L"cannot mark " + path + L" read-only: " + Win32Message(::GetLastError());
         ::DeleteFileW(path.c_str());
         return false;
     }
@@ -431,7 +522,7 @@ bool Injector::InjectHook(HWND target, DWORD launcherPid, uint32_t sessionId,
         const LRESULT sent =
             ::SendMessageTimeoutW(target, message_, static_cast<WPARAM>(launcherPid),
                                   static_cast<LPARAM>(sessionId), SMTO_ABORTIFHUNG | SMTO_BLOCK,
-                                  4000, &result);
+                                  1000, &result);
         const DWORD sendError = ::GetLastError();
         ::UnhookWindowsHookEx(hook);
 
@@ -482,7 +573,7 @@ bool Injector::InjectHelper(HWND target, DWORD launcherPid, uint32_t sessionId,
         return false;
     }
 
-    const DWORD wait = ::WaitForSingleObject(process.hProcess, 8000);
+    const DWORD wait = ::WaitForSingleObject(process.hProcess, 3000);
     DWORD code = 0;
     ::GetExitCodeProcess(process.hProcess, &code);
 

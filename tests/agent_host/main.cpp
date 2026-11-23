@@ -31,15 +31,19 @@ constexpr UINT_PTR kResetTimer = 1;
 constexpr DWORD kResetIntervalMs = 1000;
 constexpr uint32_t kSessionId = 0x51E55101u;
 constexpr int kHandshakeIterations = 40;
+constexpr int kMassWindows = 10;
 
 using HookProcFn = LRESULT(CALLBACK*)(int, WPARAM, LPARAM);
 
 bool g_pass = true;
 volatile LONG g_resetAffinity = 1;
+volatile LONG g_showHiddenEvents = 0;
 
 struct Host {
     HWND window = nullptr;
     HWND secondWindow = nullptr;
+    HWND toolWindow = nullptr;
+    HWND massWindows[kMassWindows] = {};
     PROCESS_INFORMATION lease = {};
     HMODULE agent = nullptr;
     gf::SessionIpc ipc;
@@ -118,6 +122,15 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             return 0;
 
+        case WM_SHOWWINDOW:
+            // 1.5: the old fallback hid and re-showed the window when the
+            // shell taskbar object was unavailable.  Count hide attempts so a
+            // test can prove the window is never touched that way.
+            if (wParam == FALSE) {
+                ::InterlockedIncrement(&g_showHiddenEvents);
+            }
+            return 0;
+
         case WM_DESTROY:
             ::KillTimer(hwnd, kResetTimer);
             ::PostQuitMessage(0);
@@ -154,6 +167,8 @@ DWORD WINAPI DriverThread(LPVOID parameter) {
     Check(CurrentAffinity(window) == 0, L"capture affinity restored");
     Check((::GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0,
           L"taskbar style restored");
+    Check((::GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_APPWINDOW) != 0,
+          L"taskbar button (APPWINDOW) restored");
 
     // 1.6: the agent must never touch the window frame.  Capture the style,
     // ex-style and rect, hide and show the window again, and require them to
@@ -271,6 +286,71 @@ DWORD WINAPI DriverThread(LPVOID parameter) {
     twinA.Close();
     twinB.Close();
 
+    // 1.7: batch attach.  The agent's registry must hold more than the old
+    // limit of 8: ten concurrent sessions of one process (a realistic batch,
+    // e.g. several windows of a single application) must all attach, hide and
+    // restore.  This also guards against the worker-limit regression.
+    gf::SessionIpc mass[kMassWindows];
+    int massAttached = 0;
+    for (int i = 0; i < kMassWindows; ++i) {
+        const uint32_t id = host->nextSessionId++;
+        if (AttachSession(*host, host->massWindows[i], id, mass[i])) {
+            ++massAttached;
+        }
+    }
+    Check(massAttached == kMassWindows,
+          L"ten windows of one process attach (worker limit raised to 32)");
+
+    int massHidden = 0;
+    for (int i = 0; i < kMassWindows; ++i) {
+        if (mass[i].Send(gf::Cmd::Hide, 3000) &&
+            CurrentAffinity(host->massWindows[i]) == 0x11) {
+            ++massHidden;
+        }
+    }
+    Check(massHidden == kMassWindows, L"all ten batch windows excluded from capture");
+
+    for (int i = 0; i < kMassWindows; ++i) {
+        mass[i].Send(gf::Cmd::Uninstall, 200);
+    }
+    for (int i = 0; i < kMassWindows; ++i) {
+        WaitForDetached(mass[i], 3000);
+    }
+    ::Sleep(400);
+    int massRestored = 0;
+    for (int i = 0; i < kMassWindows; ++i) {
+        if (CurrentAffinity(host->massWindows[i]) == 0) {
+            ++massRestored;
+        }
+    }
+    Check(massRestored == kMassWindows, L"all ten batch windows restored after uninstall");
+    for (int i = 0; i < kMassWindows; ++i) {
+        mass[i].Close();
+    }
+
+    // 1.5: a tool window has no taskbar button, so DeleteTab/AddTab must be
+    // skipped for it and the old ShowWindow fallback must never run.  The
+    // ex-style must stay a tool window without gaining APPWINDOW.
+    gf::SessionIpc tool;
+    const uint32_t toolId = host->nextSessionId++;
+    Check(AttachSession(*host, host->toolWindow, toolId, tool),
+          L"tool-window session attached");
+    ::InterlockedExchange(&g_showHiddenEvents, 0);
+    Check(tool.Send(gf::Cmd::Hide, 3000), L"tool-window hide acknowledged");
+    Check((::GetWindowLongPtrW(host->toolWindow, GWL_EXSTYLE) & WS_EX_APPWINDOW) == 0,
+          L"tool window did not gain APPWINDOW while hidden");
+    Check(tool.Send(gf::Cmd::Show, 3000), L"tool-window show acknowledged");
+    ::Sleep(200);
+    Check((::GetWindowLongPtrW(host->toolWindow, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0,
+          L"tool window kept its TOOLWINDOW style");
+    Check((::GetWindowLongPtrW(host->toolWindow, GWL_EXSTYLE) & WS_EX_APPWINDOW) == 0,
+          L"tool window did not gain APPWINDOW after show");
+    Check(::InterlockedCompareExchange(&g_showHiddenEvents, 0, 0) == 0,
+          L"tool window was never hidden/re-shown as a taskbar fallback");
+    tool.Send(gf::Cmd::Uninstall, 200);
+    Check(WaitForDetached(tool, 3000), L"tool-window session detached");
+    tool.Close();
+
     // Lease/watchdog test must be last: it kills the process that plays the
     // launcher, so no later bootstrap can attach.
     gf::SessionIpc leased;
@@ -318,7 +398,7 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
 
-    host.window = ::CreateWindowExW(0, kClassName, L"GhostFrame Agent Host",
+    host.window = ::CreateWindowExW(WS_EX_APPWINDOW, kClassName, L"GhostFrame Agent Host",
                                     WS_OVERLAPPEDWINDOW | WS_VISIBLE, 80, 80, 400, 260, nullptr,
                                     nullptr, instance, nullptr);
     if (host.window == nullptr) {
@@ -339,6 +419,34 @@ int wmain(int argc, wchar_t** argv) {
     }
     ::ShowWindow(host.secondWindow, SW_SHOW);
     ::UpdateWindow(host.secondWindow);
+
+    // A tool window (no taskbar button) for the exact-taskbar-restore checks.
+    host.toolWindow = ::CreateWindowExW(WS_EX_TOOLWINDOW, kClassName,
+                                        L"GhostFrame Agent Host (tool)",
+                                        WS_OVERLAPPEDWINDOW | WS_VISIBLE, 520, 320, 320, 200,
+                                        nullptr, nullptr, instance, nullptr);
+    if (host.toolWindow == nullptr) {
+        wprintf(L"cannot create the tool window\n");
+        return 2;
+    }
+    ::ShowWindow(host.toolWindow, SW_SHOW);
+    ::UpdateWindow(host.toolWindow);
+
+    // Ten more windows of this process for the batch-attach limit test: the
+    // agent must hold more than the old limit of eight concurrent sessions.
+    for (int i = 0; i < kMassWindows; ++i) {
+        wchar_t title[64] = {};
+        swprintf_s(title, L"GhostFrame Agent Host (batch %d)", i + 1);
+        host.massWindows[i] =
+            ::CreateWindowExW(0, kClassName, title, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                              120 + (i % 5) * 180, 420 + (i / 5) * 150, 160, 120, nullptr, nullptr,
+                              instance, nullptr);
+        if (host.massWindows[i] == nullptr) {
+            wprintf(L"cannot create the batch window %d\n", i);
+            return 2;
+        }
+        ::ShowWindow(host.massWindows[i], SW_SHOW);
+    }
 
     wchar_t self[MAX_PATH] = {};
     ::GetModuleFileNameW(nullptr, self, MAX_PATH);

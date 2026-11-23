@@ -115,7 +115,7 @@ int RunSelfTest() {
         return Fail(L"attach:", error);
     }
 
-    if (!sessions.Send(0, Cmd::Hide, error)) {
+    if (sessions.Send(0, Cmd::Hide, error) != SendOutcome::Ok) {
         injector.Shutdown();
         return Fail(L"hide:", error);
     }
@@ -142,7 +142,7 @@ int RunSelfTest() {
                     std::to_wstring(hidden.samples) + L")");
     }
 
-    if (!sessions.Send(0, Cmd::Show, error)) {
+    if (sessions.Send(0, Cmd::Show, error) != SendOutcome::Ok) {
         injector.Shutdown();
         return Fail(L"show:", error);
     }
@@ -167,7 +167,7 @@ int RunSelfTest() {
                     std::to_wstring(sampledAfterShow) + L")");
     }
 
-    if (!sessions.Send(0, Cmd::Uninstall, error)) {
+    if (sessions.Send(0, Cmd::Uninstall, error) != SendOutcome::Ok) {
         injector.Shutdown();
         return Fail(L"uninstall:", error);
     }
