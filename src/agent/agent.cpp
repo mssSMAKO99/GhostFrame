@@ -28,10 +28,59 @@
 
 namespace {
 
-constexpr int kMaxWorkers = 8;
+constexpr int kMaxSessions = 8;
 constexpr DWORD kGuardTickMs = 250;
 
-volatile LONG g_workers = 0;
+// Active sessions, keyed by (launcher pid, session id).  The launcher retries
+// the bootstrap with WH_GETMESSAGE when WH_CALLWNDPROC looks slow, and the
+// 32-bit helper has its own internal retry, so the same attach message can be
+// delivered more than once.  A second worker for the same session would save
+// the already-excluded affinity (0x11) as the "original" value and restore it
+// later, leaving the window hidden after Restore all.  Registration is done
+// with a static SRWLOCK; no DllMain work is required.
+struct SessionKey {
+    DWORD launcherPid = 0;
+    uint32_t sessionId = 0;
+};
+
+SRWLOCK g_sessionLock = SRWLOCK_INIT;
+SessionKey g_sessions[kMaxSessions] = {};
+
+bool RegisterSession(DWORD launcherPid, uint32_t sessionId) {
+    bool registered = false;
+    ::AcquireSRWLockExclusive(&g_sessionLock);
+    int freeSlot = -1;
+    for (int i = 0; i < kMaxSessions; ++i) {
+        if (g_sessions[i].sessionId == 0) {
+            if (freeSlot < 0) {
+                freeSlot = i;
+            }
+        } else if (g_sessions[i].launcherPid == launcherPid &&
+                   g_sessions[i].sessionId == sessionId) {
+            ::ReleaseSRWLockExclusive(&g_sessionLock);
+            return false;  // duplicate bootstrap, not an error
+        }
+    }
+    if (freeSlot >= 0) {
+        g_sessions[freeSlot].launcherPid = launcherPid;
+        g_sessions[freeSlot].sessionId = sessionId;
+        registered = true;
+    }
+    ::ReleaseSRWLockExclusive(&g_sessionLock);
+    return registered;
+}
+
+void UnregisterSession(DWORD launcherPid, uint32_t sessionId) {
+    ::AcquireSRWLockExclusive(&g_sessionLock);
+    for (int i = 0; i < kMaxSessions; ++i) {
+        if (g_sessions[i].launcherPid == launcherPid &&
+            g_sessions[i].sessionId == sessionId) {
+            g_sessions[i] = SessionKey{};
+            break;
+        }
+    }
+    ::ReleaseSRWLockExclusive(&g_sessionLock);
+}
 
 #ifdef GF_AGENT_TRACE
 void Trace(const wchar_t* format, ...) {
@@ -112,16 +161,16 @@ bool StartWorker(HWND hwnd, DWORD launcherPid, uint32_t sessionId) {
         GF_TRACE(L"start: launcher pid equals target pid");
         return false;
     }
-    if (::InterlockedIncrement(&g_workers) > kMaxWorkers) {
-        // The counter is incremented for every attempt; undo the rejection.
-        ::InterlockedDecrement(&g_workers);
-        GF_TRACE(L"start: worker limit reached");
+    if (!RegisterSession(launcherPid, sessionId)) {
+        // Either a duplicate bootstrap for this session or the process has no
+        // free worker slot; both are rejected without touching existing state.
+        GF_TRACE(L"start: duplicate session or session limit reached");
         return false;
     }
 
     HWND root = ::GetAncestor(hwnd, GA_ROOT);
     if (root == nullptr) {
-        ::InterlockedDecrement(&g_workers);
+        UnregisterSession(launcherPid, sessionId);
         return false;
     }
 
@@ -133,7 +182,7 @@ bool StartWorker(HWND hwnd, DWORD launcherPid, uint32_t sessionId) {
 #pragma warning(pop)
     if (!found) {
         GF_TRACE(L"start: GetModuleHandleEx failed");
-        ::InterlockedDecrement(&g_workers);
+        UnregisterSession(launcherPid, sessionId);
         return false;
     }
 
@@ -141,7 +190,7 @@ bool StartWorker(HWND hwnd, DWORD launcherPid, uint32_t sessionId) {
         WorkerContext{root, ::GetCurrentProcessId(), launcherPid, sessionId, self};
     if (context == nullptr) {
         ::FreeLibrary(self);
-        ::InterlockedDecrement(&g_workers);
+        UnregisterSession(launcherPid, sessionId);
         return false;
     }
 
@@ -150,7 +199,7 @@ bool StartWorker(HWND hwnd, DWORD launcherPid, uint32_t sessionId) {
         GF_TRACE(L"start: CreateThread failed");
         delete context;
         ::FreeLibrary(self);
-        ::InterlockedDecrement(&g_workers);
+        UnregisterSession(launcherPid, sessionId);
         return false;
     }
 
@@ -227,13 +276,18 @@ void RunWorker(const WorkerContext& context) {
     gf::agent::Taskbar taskbar;
     taskbar.Init();
 
+    // Read the sequence and the cached state *before* announcing the attach.
+    // The launcher sends its first command as soon as it sees FlagAttached; a
+    // sequence read after the publish would already include that command and
+    // the worker would consider it applied (the command would be lost).
+    LONG lastSeq = ipc.state()->cmdSeq;
+    LONG lastWda = static_cast<LONG>(window.CurrentWda());
+    LONG lastError = 0;
+
     ipc.Publish(gf::Status::Attached, gf::FlagAttached,
                 gf::FlagHidden | gf::FlagBorderless | gf::FlagLeaseLost, window.CurrentWda(), 0,
                 -1);
 
-    LONG lastSeq = ipc.state()->cmdSeq;
-    LONG lastWda = static_cast<LONG>(window.CurrentWda());
-    LONG lastError = 0;
     bool running = true;
 
     HANDLE waits[3] = {lease, ipc.stop_event(), ipc.cmd_event()};
@@ -292,11 +346,15 @@ void RunWorker(const WorkerContext& context) {
 DWORD WINAPI WorkerThread(LPVOID parameter) {
     WorkerContext* context = static_cast<WorkerContext*>(parameter);
     const HMODULE self = context->self;
+    const DWORD launcherPid = context->launcherPid;
+    const uint32_t sessionId = context->sessionId;
 
     RunWorker(*context);
 
+    // Free the slot only after the worker is completely done restoring, so a
+    // retried bootstrap while the worker still runs stays a no-op.
+    UnregisterSession(launcherPid, sessionId);
     delete context;
-    ::InterlockedDecrement(&g_workers);
     ::FreeLibraryAndExitThread(self, 0);
 }
 

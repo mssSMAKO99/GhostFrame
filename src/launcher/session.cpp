@@ -140,8 +140,12 @@ bool SessionManager::Attach(HWND hwnd, std::wstring& error) {
                              InjectionStrategy::GetMessage, error)) {
             attached = session.ipc.WaitForFlag(FlagAttached, 2500);
         }
-        injector_.ReleasePendingHook();
     }
+    // The WH_GETMESSAGE hook must be released on both paths: after a successful
+    // retry, and also when the first attempt succeeded but a pending hook was
+    // installed by an earlier injection.  The agent de-duplicates repeated
+    // bootstraps by (launcher pid, session id), so a late message is harmless.
+    injector_.ReleasePendingHook();
 
     if (!attached) {
         session.ipc.SignalStop();

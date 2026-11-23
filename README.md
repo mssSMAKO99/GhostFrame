@@ -114,7 +114,7 @@ You can also open `GhostFrame.slnx` in Visual Studio and build the launcher proj
 
 | Test | What it covers | Where it runs |
 | :--- | :--- | :--- |
-| `GfAgentHost.exe <agent.dll>` | Agent in-process: attach, hide/show, guard re-assertion, taskbar styles, borderless, lease watchdog, self-detach (17 assertions) | Everywhere, no injection needed |
+| `GfAgentHost.exe <agent.dll>` | Agent in-process: attach, hide/show, guard re-assertion, taskbar styles, borderless, bootstrap de-duplication, attach→command handshake, lease watchdog, self-detach (35 assertions) | Everywhere, no injection needed |
 | `GfTestTarget.exe` + `GhostFrame.exe --selftest` | Full pipeline including cross-process injection | Normal desktop; blocked by some sandboxes/EDR |
 
 ```powershell

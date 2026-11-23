@@ -52,6 +52,10 @@ private:
     bool Extract(int resourceId, const wchar_t* fileName, std::wstring& error);
     bool InjectHook(HWND target, DWORD launcherPid, uint32_t sessionId, InjectionStrategy strategy,
                     std::wstring& error);
+    // 32-bit targets go through the helper executable.  It ignores `strategy`
+    // and always bootstraps with its own WH_GETMESSAGE hook, so the caller's
+    // retry in SessionManager is effectively a third attempt.  This is safe:
+    // the agent de-duplicates bootstraps by (launcher pid, session id).
     bool InjectHelper(HWND target, DWORD launcherPid, uint32_t sessionId, std::wstring& error);
     void SweepStalePayloads();
 

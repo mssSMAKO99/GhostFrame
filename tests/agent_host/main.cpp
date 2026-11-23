@@ -30,14 +30,22 @@ constexpr wchar_t kClassName[] = L"GfAgentHost";
 constexpr UINT_PTR kResetTimer = 1;
 constexpr DWORD kResetIntervalMs = 1000;
 constexpr uint32_t kSessionId = 0x51E55101u;
+constexpr int kHandshakeIterations = 40;
+
+using HookProcFn = LRESULT(CALLBACK*)(int, WPARAM, LPARAM);
 
 bool g_pass = true;
+volatile LONG g_resetAffinity = 1;
 
 struct Host {
     HWND window = nullptr;
+    HWND secondWindow = nullptr;
     PROCESS_INFORMATION lease = {};
     HMODULE agent = nullptr;
     gf::SessionIpc ipc;
+    HookProcFn hookProc = nullptr;
+    UINT attachMessage = 0;
+    uint32_t nextSessionId = kSessionId + 1;
 };
 
 void Check(bool condition, const wchar_t* what) {
@@ -52,6 +60,51 @@ DWORD CurrentAffinity(HWND hwnd) {
     return ::GetWindowDisplayAffinity(hwnd, &value) ? value : 0xFFFFFFFFu;
 }
 
+// LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR requires a fully qualified path, so resolve
+// relative arguments (as used in the README) before loading the agent.
+std::wstring AbsolutePath(const std::wstring& path) {
+    wchar_t buffer[MAX_PATH] = {};
+    const DWORD length = ::GetFullPathNameW(path.c_str(), MAX_PATH, buffer, nullptr);
+    if (length == 0 || length >= MAX_PATH) {
+        return path;
+    }
+    return buffer;
+}
+
+// Delivers the same CWPSTRUCT the WH_CALLWNDPROC/WH_GETMESSAGE chain would
+// hand to the agent.  Calling it twice with the same session id simulates the
+// launcher's bootstrap retry.
+void DeliverAttach(const Host& host, HWND window, uint32_t sessionId) {
+    CWPSTRUCT attach = {};
+    attach.hwnd = window;
+    attach.message = host.attachMessage;
+    attach.wParam = static_cast<WPARAM>(host.lease.dwProcessId);
+    attach.lParam = static_cast<LPARAM>(sessionId);
+    host.hookProc(HC_ACTION, 0, reinterpret_cast<LPARAM>(&attach));
+}
+
+bool AttachSession(Host& host, HWND window, uint32_t sessionId, gf::SessionIpc& ipc) {
+    if (!ipc.Create(::GetCurrentProcessId(), sessionId)) {
+        return false;
+    }
+    DeliverAttach(host, window, sessionId);
+    return ipc.WaitForFlag(gf::FlagAttached, 3000);
+}
+
+bool WaitForDetached(const gf::SessionIpc& ipc, DWORD timeoutMs) {
+    const ULONGLONG deadline = ::GetTickCount64() + timeoutMs;
+    for (;;) {
+        const gf::SharedState* state = ipc.state();
+        if (state != nullptr && state->status == static_cast<LONG>(gf::Status::Detached)) {
+            return true;
+        }
+        if (::GetTickCount64() >= deadline) {
+            return false;
+        }
+        ::Sleep(10);
+    }
+}
+
 LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_CREATE:
@@ -59,7 +112,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
 
         case WM_TIMER:
-            if (wParam == kResetTimer) {
+            if (wParam == kResetTimer && g_resetAffinity) {
                 // Pretend to be an application that keeps undoing the exclusion.
                 ::SetWindowDisplayAffinity(hwnd, WDA_NONE);
             }
@@ -107,14 +160,112 @@ DWORD WINAPI DriverThread(LPVOID parameter) {
     Check(host->ipc.Send(gf::Cmd::BorderlessOff, 3000), L"borderless off acknowledged");
     Check((::GetWindowLongPtrW(window, GWL_STYLE) & WS_CAPTION) != 0, L"caption restored");
 
-    Check(host->ipc.Send(gf::Cmd::Hide, 3000), L"hide before the lease test");
+    // From here on affinity values are compared exactly, so stop the window's
+    // own reset timer from racing the checks.
+    g_resetAffinity = 0;
+
+    // 1.1: a repeated bootstrap for the same (launcher pid, session id) must
+    // not start a second worker.  Such a worker would save 0x11 as the
+    // "original" affinity and leave the window excluded after Uninstall.
+    Check(host->ipc.Send(gf::Cmd::Hide, 3000), L"hide before the duplicate bootstrap");
+    Check(CurrentAffinity(window) == 0x11, L"excluded before the duplicate bootstrap");
+
+    DeliverAttach(*host, window, kSessionId);
+    ::Sleep(250);
+    Check(host->ipc.Send(gf::Cmd::Hide, 3000),
+          L"duplicate bootstrap keeps the command path alive");
+
+    host->ipc.Send(gf::Cmd::Uninstall, 200);
+    Check(WaitForDetached(host->ipc, 3000), L"agent detached after the duplicate bootstrap");
+    // Give a surviving duplicate worker (if any) a couple of guard ticks to
+    // re-exclude the window before checking the restored value.
+    ::Sleep(500);
+    Check(CurrentAffinity(window) == 0,
+          L"duplicate bootstrap still restores the original affinity");
+    host->ipc.Close();
+
+    // 1.1: after Uninstall the registry entry is gone, so a fresh session for
+    // the same window must attach normally.
+    gf::SessionIpc second;
+    const uint32_t secondId = host->nextSessionId++;
+    Check(AttachSession(*host, window, secondId, second), L"new session attaches after uninstall");
+    Check(second.Send(gf::Cmd::Hide, 3000), L"new session hide acknowledged");
+    Check(CurrentAffinity(window) == 0x11, L"new session excludes the window");
+    second.Send(gf::Cmd::Uninstall, 200);
+    Check(WaitForDetached(second, 3000), L"new session detached");
+    ::Sleep(300);
+    Check(CurrentAffinity(window) == 0, L"new session restores the original affinity");
+    second.Close();
+
+    // 1.2: the launcher sends Hide as soon as it observes FlagAttached.  The
+    // agent must read cmdSeq before publishing Attached, otherwise the command
+    // is treated as already applied and lost.
+    int handshakeFailures = 0;
+    for (int i = 0; i < kHandshakeIterations; ++i) {
+        gf::SessionIpc ipc;
+        const uint32_t id = host->nextSessionId++;
+        if (!ipc.Create(::GetCurrentProcessId(), id)) {
+            wprintf(L"      handshake iteration %d: cannot create the state block\n", i);
+            ++handshakeFailures;
+            break;
+        }
+
+        DeliverAttach(*host, window, id);
+        const bool attached = ipc.WaitForFlag(gf::FlagAttached, 2000);
+        const bool acked = attached && ipc.Send(gf::Cmd::Hide, 2000);
+        if (!acked || CurrentAffinity(window) != 0x11) {
+            wprintf(L"      handshake iteration %d: attached=%d acked=%d affinity=0x%X\n", i,
+                    attached ? 1 : 0, acked ? 1 : 0, CurrentAffinity(window));
+            ++handshakeFailures;
+        }
+
+        ipc.SignalStop();
+        if (!WaitForDetached(ipc, 2000)) {
+            ++handshakeFailures;
+        }
+        ipc.Close();
+    }
+    Check(handshakeFailures == 0,
+          L"hide immediately after attach acknowledged in every iteration");
+
+    // 1.1: the de-duplication key is (launcher pid, session id), not hwnd.  Two
+    // different windows of the same process (and the same launcher) must be
+    // attachable at the same time.
+    gf::SessionIpc twinA;
+    gf::SessionIpc twinB;
+    const uint32_t twinAId = host->nextSessionId++;
+    const uint32_t twinBId = host->nextSessionId++;
+    Check(AttachSession(*host, window, twinAId, twinA), L"first twin session attached");
+    Check(AttachSession(*host, host->secondWindow, twinBId, twinB),
+          L"second session of the same process attached");
+    Check(twinA.Send(gf::Cmd::Hide, 3000) && twinB.Send(gf::Cmd::Hide, 3000),
+          L"both twin sessions hid their windows");
+    Check(CurrentAffinity(window) == 0x11 && CurrentAffinity(host->secondWindow) == 0x11,
+          L"both twin windows are excluded");
+    twinA.Send(gf::Cmd::Uninstall, 200);
+    twinB.Send(gf::Cmd::Uninstall, 200);
+    Check(WaitForDetached(twinA, 3000) && WaitForDetached(twinB, 3000),
+          L"both twin sessions detached");
+    ::Sleep(400);
+    Check(CurrentAffinity(window) == 0 && CurrentAffinity(host->secondWindow) == 0,
+          L"both twin windows restored their affinity");
+    twinA.Close();
+    twinB.Close();
+
+    // Lease/watchdog test must be last: it kills the process that plays the
+    // launcher, so no later bootstrap can attach.
+    gf::SessionIpc leased;
+    const uint32_t leasedId = host->nextSessionId++;
+    Check(AttachSession(*host, window, leasedId, leased), L"session for the lease test attached");
+    Check(leased.Send(gf::Cmd::Hide, 3000), L"hide before the lease test");
     Check(CurrentAffinity(window) == 0x11, L"excluded before lease loss");
 
     ::TerminateProcess(host->lease.hProcess, 0);
     ::Sleep(1800);
     Check(CurrentAffinity(window) == 0, L"lease loss restored the affinity");
-    Check(host->ipc.state()->status == static_cast<LONG>(gf::Status::Detached),
+    Check(leased.state()->status == static_cast<LONG>(gf::Status::Detached),
           L"agent detached after lease loss");
+    leased.Close();
 
     ::PostMessageW(window, WM_CLOSE, 0, 0);
     return 0;
@@ -132,7 +283,7 @@ int wmain(int argc, wchar_t** argv) {
         wprintf(L"usage: GfAgentHost <path-to-GhostFrameAgent64.dll>\n");
         return 2;
     }
-    const std::wstring agentPath = argv[1];
+    const std::wstring agentPath = AbsolutePath(argv[1]);
 
     Host host;
 
@@ -158,6 +309,18 @@ int wmain(int argc, wchar_t** argv) {
     ::ShowWindow(host.window, SW_SHOW);
     ::UpdateWindow(host.window);
 
+    // A second window in the same process, used to prove that the agent's
+    // de-duplication key is the session, not the window handle.
+    host.secondWindow = ::CreateWindowExW(0, kClassName, L"GhostFrame Agent Host (second)",
+                                          WS_OVERLAPPEDWINDOW | WS_VISIBLE, 520, 80, 320, 200,
+                                          nullptr, nullptr, instance, nullptr);
+    if (host.secondWindow == nullptr) {
+        wprintf(L"cannot create the second host window\n");
+        return 2;
+    }
+    ::ShowWindow(host.secondWindow, SW_SHOW);
+    ::UpdateWindow(host.secondWindow);
+
     wchar_t self[MAX_PATH] = {};
     ::GetModuleFileNameW(nullptr, self, MAX_PATH);
     wchar_t commandLine[MAX_PATH + 32] = {};
@@ -180,27 +343,20 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
 
-    using HookProcFn = LRESULT(CALLBACK*)(int, WPARAM, LPARAM);
-    auto hookProc = reinterpret_cast<HookProcFn>(::GetProcAddress(host.agent, "GfAgentHookProc"));
-    if (hookProc == nullptr) {
+    host.hookProc = reinterpret_cast<HookProcFn>(::GetProcAddress(host.agent, "GfAgentHookProc"));
+    if (host.hookProc == nullptr) {
         wprintf(L"the agent does not export GfAgentHookProc\n");
         return 2;
     }
 
-    const UINT attachMessage = ::RegisterWindowMessageW(gf::kAttachMessageName);
-    if (attachMessage == 0) {
+    host.attachMessage = ::RegisterWindowMessageW(gf::kAttachMessageName);
+    if (host.attachMessage == 0) {
         wprintf(L"RegisterWindowMessage failed\n");
         return 2;
     }
 
     Check(host.ipc.Create(::GetCurrentProcessId(), kSessionId), L"shared state created");
-
-    CWPSTRUCT attach = {};
-    attach.hwnd = host.window;
-    attach.message = attachMessage;
-    attach.wParam = static_cast<WPARAM>(host.lease.dwProcessId);
-    attach.lParam = static_cast<LPARAM>(kSessionId);
-    hookProc(HC_ACTION, 0, reinterpret_cast<LPARAM>(&attach));
+    DeliverAttach(host, host.window, kSessionId);
 
     HANDLE driver = ::CreateThread(nullptr, 0, DriverThread, &host, 0, nullptr);
 
@@ -211,7 +367,7 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (driver != nullptr) {
-        ::WaitForSingleObject(driver, 5000);
+        ::WaitForSingleObject(driver, 60000);
         ::CloseHandle(driver);
     }
 
