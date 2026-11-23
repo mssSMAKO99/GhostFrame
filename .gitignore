@@ -1,28 +1,29 @@
-# Служебные папки и файлы Visual Studio
-.vs/
-*.user
-*.suo
-*.aps
-*.sln.docstates
-
-# Все папки компиляции и логов (включая вложенные)
+# Build output
 **/Release/
 **/Debug/
 **/x64/
 **/x86/
-**/TestHookInProcess/
-*.tlog/
-*.log
-*.recipe
-
-# Скомпилированные бинарники и промежуточные файлы
-*.exe
-*.dll
-*.lib
-*.exp
-*.pdb
-*.iobj
-*.ipdb
+**/build/
+**/dist/
+**/docs/
 *.obj
 *.res
-*.pch
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+*.exp
+*.lib
+*.tlog
+*.exe
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+*.VC.db
+*.VC.VC.opendb
+
+# Local logs
+*.log

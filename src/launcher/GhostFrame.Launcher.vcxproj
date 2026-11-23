@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{6C1B4E7A-0003-4C55-9E3A-7F0D2B1A0003}</ProjectGuid>
+    <RootNamespace>GhostFrameLauncher</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Toolset.props" />
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Compile.props" />
+
+  <PropertyGroup>
+    <TargetName>GhostFrame</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(GF_SolutionDir)include;$(GF_PayloadDir);$(MSBuildProjectDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>user32.lib;gdi32.lib;shell32.lib;ole32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Manifest>
+      <AdditionalManifestFiles>$(MSBuildProjectDirectory)\app.manifest</AdditionalManifestFiles>
+    </Manifest>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="app.cpp" />
+    <ClCompile Include="injector.cpp" />
+    <ClCompile Include="ipc_client.cpp" />
+    <ClCompile Include="log.cpp" />
+    <ClCompile Include="selftest.cpp" />
+    <ClCompile Include="session.cpp" />
+    <ClCompile Include="ui.cpp" />
+    <ClCompile Include="window_list.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="app.h" />
+    <ClInclude Include="injector.h" />
+    <ClInclude Include="ipc_client.h" />
+    <ClInclude Include="log.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="selftest.h" />
+    <ClInclude Include="session.h" />
+    <ClInclude Include="ui.h" />
+    <ClInclude Include="window_list.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="app.ico" />
+  </ItemGroup>
+
+  <!--
+    Payloads are embedded as RCDATA, so they must exist before the resource
+    compiler runs.  Building them here also keeps a plain "build the launcher"
+    working from a fresh clone, without a manual five-step dance.
+
+    The .res file is deleted so that a rebuilt payload always triggers a fresh
+    resource compile: MSBuild would otherwise only track resources.rc.
+  -->
+  <Target Name="GF_BuildPayloads" BeforeTargets="ResourceCompile">
+    <MakeDir Directories="$(GF_PayloadDir)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\agent\GhostFrame.Agent.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=x64;OutDir=$(GF_PayloadDir);SolutionDir=$(GF_SolutionDir)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\agent\GhostFrame.Agent.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);SolutionDir=$(GF_SolutionDir)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\helper\GhostFrame.Helper.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);SolutionDir=$(GF_SolutionDir)" />
+    <Delete Files="$(IntDir)resources.res" />
+  </Target>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
