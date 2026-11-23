@@ -194,6 +194,7 @@ BOOL CALLBACK WindowEnumerator::EnumProc(HWND hwnd, LPARAM param) {
 
     window.arch = info.arch;
     window.integrity = info.integrity;
+    window.createTime = info.createTime;
     window.elevated = context->self->selfIntegrity_ != 0 && info.integrity != 0 &&
                       info.integrity > context->self->selfIntegrity_;
     window.uwp = _wcsicmp(window.processName.c_str(), L"ApplicationFrameHost.exe") == 0 ||

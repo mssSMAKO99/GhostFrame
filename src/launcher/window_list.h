@@ -18,6 +18,7 @@ struct WindowInfo {
     std::wstring processName;  // executable file name, e.g. "notepad.exe"
     std::wstring exePath;
     DWORD pid = 0;
+    ULONGLONG createTime = 0;  // process start time, for the auto-capture guard
     Arch arch = Arch::Other;
     DWORD integrity = 0;
     bool elevated = false;  // runs at a higher integrity level than GhostFrame

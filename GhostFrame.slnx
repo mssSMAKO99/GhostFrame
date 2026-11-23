@@ -6,4 +6,5 @@
   <Project Path="src/launcher/GhostFrame.Launcher.vcxproj" Id="6c1b4e7a-0003-4c55-9e3a-7f0d2b1a0003" />
   <Project Path="tests/target/GfTestTarget.vcxproj" Id="6c1b4e7a-0004-4c55-9e3a-7f0d2b1a0004" />
   <Project Path="tests/agent_host/GfAgentHost.vcxproj" Id="6c1b4e7a-0005-4c55-9e3a-7f0d2b1a0005" />
+  <Project Path="tests/settings_host/GfSettingsHost.vcxproj" Id="6c1b4e7a-0006-4c55-9e3a-7f0d2b1a0006" />
 </Solution>

@@ -66,6 +66,12 @@ itself afterwards, so the extracted payload files can be removed.
   has no fixed row limit.
 - **Self-healing**: restore on explicit request, on launcher exit, on crash/kill (lease
   watchdog), and when the target window disappears.
+- **Saved settings**: window geometry, the `SETTINGS` tab, your hotkeys and the
+  auto-capture rules live in `%LOCALAPPDATA%\GhostFrame\settings.json` and survive a
+  restart. A corrupt file is renamed to `settings.json.bad` and the defaults are used.
+- **Auto-capture**: list the applications to capture automatically (by executable name)
+  and GhostFrame attaches — and optionally hides — their windows as they appear, with an
+  `AUTO` badge in the window list. It never re-captures a window you removed by hand.
 - **Honest status**: every command is acknowledged over shared memory; failures carry the
   Win32 error code instead of a green "success".
 - **Per-monitor DPI aware**, tray icon, single instance, UTF-8 sources, static CRT.
@@ -82,11 +88,47 @@ itself afterwards, so the extracted payload files can be removed.
 | `Ctrl + Shift + Up` | Restore the selected target |
 | `Ctrl + Shift + Q` | Ask the selected target to close |
 
+These are the defaults. Open the `SETTINGS` tab and click a row to rebind it: the next
+combination you press is captured (at least one of `Ctrl`/`Alt`/`Shift`/`Win` is required,
+duplicates are rejected and a combination already taken by another application rolls back
+to the previous value). `RESET HOTKEYS` restores the defaults.
+
 Hotkeys act on the whole selection in the `TARGETS` list (a plain click selects one;
 `Ctrl`/`Shift` extends the selection, `Ctrl+A` selects all). With no selection, `H`
 captures the current foreground window and starts tracking it. `Del` removes the selected
 targets (uninstall + forget), and `Ctrl + Shift + Up/Down` minimize/restore all selected
 ones.
+
+## Settings and auto-capture
+
+`%LOCALAPPDATA%\GhostFrame\settings.json` (UTF-8) stores the window geometry, the UI
+options and the hotkeys:
+
+```json
+{
+  "version": 1,
+  "ui": { "x": 100, "y": 100, "width": 760, "height": 560,
+          "minimizeToTray": true, "noSelfExclude": false,
+          "hideOnAttach": true, "lastTab": "targets" },
+  "hotkeys": { "toggleSelection": "Ctrl+Shift+H", "restoreAll": "Ctrl+Shift+R",
+               "toggleUi": "Ctrl+Shift+M", "minimize": "Ctrl+Shift+Down",
+               "restore": "Ctrl+Shift+Up", "close": "Ctrl+Shift+Q" },
+  "autoAttach": [
+    { "enabled": true, "match": "exe", "value": "notepad.exe", "hide": true }
+  ]
+}
+```
+
+The file is written atomically (`.tmp` then replace). Unknown keys are ignored, and a
+malformed file is renamed to `settings.json.bad` so a bad edit never blocks startup.
+
+Auto-capture rules match an executable name (`match: "exe"`, exact and case-insensitive)
+or a window title (`match: "title"`, case-insensitive substring). When a matching window
+appears — on startup and for new windows — GhostFrame attaches it and, when `hide` is
+true, excludes it from capture. Windows you removed by hand, or that failed to attach a
+few times, are not captured again until their process recreates them. The `SETTINGS` tab
+manages the rules: `ADD FOREGROUND APP`, `BROWSE EXE…`, enable/disable, hide toggle,
+remove, and `APPLY NOW` to run the rules against the windows that are open right now.
 
 ## Command line
 
@@ -125,6 +167,7 @@ You can also open `GhostFrame.slnx` in Visual Studio and build the launcher proj
 | Test | What it covers | Where it runs |
 | :--- | :--- | :--- |
 | `GfAgentHost.exe <agent.dll>` | Agent in-process: attach, hide/show, guard re-assertion, taskbar styles, untouched window frame, bootstrap de-duplication, attach→command handshake, batch attach (10 windows of one process), lease watchdog, self-detach (48 assertions) | Everywhere, no injection needed |
+| `GfSettingsHost.exe` | Launcher settings: defaults, JSON round-trip, corrupt-file recovery, atomic save, hotkey parse/format/validation, auto-capture matching and the anti-loop guard (52 assertions) | Everywhere |
 | `GfTestTarget.exe` + `GhostFrame.exe --selftest` | Full pipeline including cross-process injection | Normal desktop; blocked by some sandboxes/EDR |
 
 ```powershell
@@ -144,6 +187,7 @@ src/helper/                  32-bit one-shot bootstrap executable
 src/launcher/                UI, injector, session manager, IPC client, self-test
 tests/target/                window that keeps resetting its affinity
 tests/agent_host/            deterministic in-process harness for the agent
+tests/settings_host/         harness for settings, hotkeys and auto-capture matching
 docs/AUDIT-v1.md             review of the pre-rewrite version (historical)
 ```
 

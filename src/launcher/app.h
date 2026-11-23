@@ -6,6 +6,7 @@
 
 #include "injector.h"
 #include "session.h"
+#include "settings.h"
 #include "ui.h"
 #include "window_list.h"
 
@@ -29,7 +30,7 @@ public:
     void Shutdown();
 
 private:
-    enum class Tab { Targets, Windows };
+    enum class Tab { Targets, Windows, Settings };
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static DWORD WINAPI AttachThreadProc(LPVOID param);
@@ -46,6 +47,7 @@ private:
     void OnDpiChanged(UINT dpi, const RECT* suggested);
     void OnAttachDone(LPARAM lParam);
     void OnAttachProgress(WPARAM done, LPARAM target);
+    void OnAutoCaptureMessage(HWND hwnd);
     void OnMouseMove(int x, int y);
     void OnMouseLeave();
     void OnMouseWheel(int x, int y, int delta);
@@ -62,7 +64,31 @@ private:
     void RegisterHotkeys();
     void UnregisterHotkeys();
 
+    // Settings: persistence, hotkeys and auto-capture.
+    void LoadSettings();
+    void SaveSettings();
+    void CaptureGeometry();
+    void MarkSettingsDirty();
+    bool ApplyHotkeys(const gf::Settings& candidate, std::wstring& error);
+    int HotkeyCommandId(gf::HotkeyAction action) const;
+    void ResetHotkeysToDefaults();
+    void BeginRebind(gf::HotkeyAction action);
+    void FinishRebind(UINT modifiers, UINT virtualKey);
+
+    void ScanAutoCapture();
+    void ApplyAutoRulesNow();
+    void AddRuleForWindow(HWND hwnd);
+    void AddRuleForExePath(const std::wstring& path);
+    static void CALLBACK WinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject,
+                                      LONG idChild, DWORD thread, DWORD time);
+
+    void BuildSettingsRows();
+    void OnSettingsListAction(ui::ListWidget::Action action, bool hotkeyList);
+    RECT HotkeysListRect() const;
+    RECT RulesListRect() const;
+
     void SelectTab(Tab tab);
+    void ApplyTabControls();
     void RefreshWindows();
     void BuildTargetRows();
     void BuildWindowRows();
@@ -135,4 +161,25 @@ private:
     bool attachHide_ = false;
     int attachTotal_ = 0;
     PendingCommand pendingCommand_;
+
+    // Persistent configuration and the auto-capture engine.
+    gf::Settings settings_;
+    bool settingsDirty_ = false;
+    ULONGLONG settingsSaveDue_ = 0;
+    HWINEVENTHOOK winEventHook_ = nullptr;
+    gf::AutoCaptureGuard autoGuard_;
+    ULONGLONG autoLastScan_ = 0;
+    struct AutoRequest {
+        HWND hwnd = nullptr;
+        DWORD pid = 0;
+        ULONGLONG createTime = 0;
+    };
+    std::vector<AutoRequest> autoRequests_;
+
+    // SETTINGS tab.
+    ui::ListWidget hotkeysList_;
+    ui::ListWidget rulesList_;
+    int selectedRule_ = -1;
+    bool rebinding_ = false;
+    gf::HotkeyAction rebindAction_ = gf::HotkeyAction::Count;
 };

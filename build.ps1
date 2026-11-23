@@ -60,6 +60,7 @@ Invoke-Build (Join-Path $root 'src\launcher\GhostFrame.Launcher.vcxproj') 'x64'
 if (-not $SkipTests) {
     Invoke-Build (Join-Path $root 'tests\target\GfTestTarget.vcxproj') 'x64'
     Invoke-Build (Join-Path $root 'tests\agent_host\GfAgentHost.vcxproj') 'x64'
+    Invoke-Build (Join-Path $root 'tests\settings_host\GfSettingsHost.vcxproj') 'x64'
 }
 
 $output = Join-Path $root "build\out\x64\$Configuration"

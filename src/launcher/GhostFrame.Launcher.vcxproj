@@ -51,7 +51,7 @@
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>user32.lib;gdi32.lib;shell32.lib;ole32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;shell32.lib;ole32.lib;bcrypt.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <AdditionalManifestFiles>$(MSBuildProjectDirectory)\app.manifest</AdditionalManifestFiles>
@@ -66,6 +66,7 @@
     <ClCompile Include="log.cpp" />
     <ClCompile Include="selftest.cpp" />
     <ClCompile Include="session.cpp" />
+    <ClCompile Include="settings.cpp" />
     <ClCompile Include="ui.cpp" />
     <ClCompile Include="window_list.cpp" />
   </ItemGroup>
@@ -77,6 +78,7 @@
     <ClInclude Include="resource.h" />
     <ClInclude Include="selftest.h" />
     <ClInclude Include="session.h" />
+    <ClInclude Include="settings.h" />
     <ClInclude Include="ui.h" />
     <ClInclude Include="window_list.h" />
   </ItemGroup>
