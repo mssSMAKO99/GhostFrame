@@ -22,14 +22,8 @@ const wchar_t* StateLabel(const gf::Session& session) {
     if (session.errored()) {
         return L"ERROR";
     }
-    if (session.hidden() && session.borderless()) {
-        return L"HIDDEN+";
-    }
     if (session.hidden()) {
         return L"HIDDEN";
-    }
-    if (session.borderless()) {
-        return L"BORDERLESS";
     }
     return L"VISIBLE";
 }
@@ -40,9 +34,6 @@ COLORREF StateColor(const gf::Session& session) {
     }
     if (session.hidden()) {
         return ui::kNeon;
-    }
-    if (session.borderless()) {
-        return ui::kNeonDim;
     }
     return ui::kMuted;
 }
@@ -208,12 +199,8 @@ LRESULT App::Handle(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_DRAWITEM: {
             const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
             bool active = false;
-            if (SelectedValid()) {
-                if (item->CtlID == ID_BTN_TOGGLE) {
-                    active = sessions_.At(static_cast<size_t>(selected_)).hidden();
-                } else if (item->CtlID == ID_BTN_BORDER) {
-                    active = sessions_.At(static_cast<size_t>(selected_)).borderless();
-                }
+            if (SelectedValid() && item->CtlID == ID_BTN_TOGGLE) {
+                active = sessions_.At(static_cast<size_t>(selected_)).hidden();
             }
             ui::DrawButton(item, theme_, active, item->CtlID == ID_BTN_CLOSE);
             return TRUE;
@@ -310,7 +297,6 @@ void App::CreateChildren() {
         {ID_BTN_HIDE_UI, L"_"},
         {ID_BTN_EXIT, L"X"},
         {ID_BTN_TOGGLE, L"[CTRL+SHIFT+H]  TOGGLE STEALTH"},
-        {ID_BTN_BORDER, L"[CTRL+SHIFT+B]  TOGGLE BORDERLESS"},
         {ID_BTN_RESTORE_ALL, L"[CTRL+SHIFT+R]  RESTORE ALL TARGETS"},
         {ID_BTN_MIN, L"[DOWN] MINIMIZE"},
         {ID_BTN_RESTORE, L"[UP] RESTORE"},
@@ -336,7 +322,6 @@ void App::Layout() {
     place(ID_BTN_HIDE_UI, kBaseWidth - 78, 7, 30, 22);
     place(ID_BTN_EXIT, kBaseWidth - 44, 7, 30, 22);
     place(ID_BTN_TOGGLE, 16, 274, kBaseWidth - 32, 32);
-    place(ID_BTN_BORDER, 16, 312, kBaseWidth - 32, 32);
     place(ID_BTN_RESTORE_ALL, 16, 350, kBaseWidth - 32, 30);
     place(ID_BTN_MIN, 16, 388, 168, 30);
     place(ID_BTN_RESTORE, 196, 388, 168, 30);
@@ -351,7 +336,6 @@ void App::RegisterHotkeys() {
     };
     const HotkeySpec hotkeys[] = {
         {ID_BTN_TOGGLE, 'H', L"Ctrl+Shift+H"},
-        {ID_BTN_BORDER, 'B', L"Ctrl+Shift+B"},
         {ID_BTN_RESTORE_ALL, 'R', L"Ctrl+Shift+R"},
         {ID_BTN_HIDE_UI, 'M', L"Ctrl+Shift+M"},
         {ID_BTN_MIN, VK_DOWN, L"Ctrl+Shift+Down"},
@@ -376,9 +360,8 @@ void App::RegisterHotkeys() {
 }
 
 void App::UnregisterHotkeys() {
-    const int ids[] = {ID_BTN_TOGGLE, ID_BTN_BORDER,   ID_BTN_RESTORE_ALL,
-                       ID_BTN_HIDE_UI, ID_BTN_MIN,     ID_BTN_RESTORE,
-                       ID_BTN_CLOSE};
+    const int ids[] = {ID_BTN_TOGGLE, ID_BTN_RESTORE_ALL, ID_BTN_HIDE_UI,
+                       ID_BTN_MIN,    ID_BTN_RESTORE,   ID_BTN_CLOSE};
     for (int id : ids) {
         ::UnregisterHotKey(hwnd_, id);
     }
@@ -518,9 +501,6 @@ void App::OnCommand(int id) {
         case ID_BTN_TOGGLE:
             ToggleStealth(selected_);
             break;
-        case ID_BTN_BORDER:
-            ToggleBorderless(selected_);
-            break;
         case ID_BTN_RESTORE_ALL:
             RestoreAll();
             break;
@@ -653,28 +633,6 @@ void App::ToggleStealth(int index) {
     selected_ = index;
     SetStatus(hide ? L"STEALTH ENGAGED — WINDOW EXCLUDED FROM CAPTURE"
                    : L"CAPTURE EXCLUSION LIFTED");
-    InvalidateAll();
-}
-
-void App::ToggleBorderless(int index) {
-    if (index < 0 || static_cast<size_t>(index) >= sessions_.Count()) {
-        AttachForeground(false);
-        if (!SelectedValid()) {
-            return;
-        }
-        index = selected_;
-    }
-
-    const bool enable = !sessions_.At(static_cast<size_t>(index)).borderless();
-    std::wstring error;
-    if (!sessions_.Send(static_cast<size_t>(index),
-                        enable ? gf::Cmd::BorderlessOn : gf::Cmd::BorderlessOff, error)) {
-        SetStatus(L"ERROR: " + error, true);
-        return;
-    }
-
-    selected_ = index;
-    SetStatus(enable ? L"BORDERLESS MODE ON" : L"WINDOW FRAME RESTORED");
     InvalidateAll();
 }
 

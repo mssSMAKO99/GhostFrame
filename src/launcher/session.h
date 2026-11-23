@@ -29,7 +29,6 @@ struct Session {
 
     bool attached() const { return (flags & FlagAttached) != 0; }
     bool hidden() const { return (flags & FlagHidden) != 0; }
-    bool borderless() const { return (flags & FlagBorderless) != 0; }
     bool errored() const { return status == Status::Error; }
 };
 

@@ -54,7 +54,7 @@ itself afterwards, so the extracted payload files can be removed.
   reset their affinity.
 - **Taskbar / Alt+Tab hiding** with `WS_EX_TOOLWINDOW` + the shell `ITaskbarList`
   (no window hide/show, so games do not lose focus or pause).
-- **Borderless toggle** that saves and restores the exact frame bits.
+- **Window frame is never modified** — only the capture affinity and the taskbar state.
 - **Multiple targets** in one session list; per-target state, `Restore all`.
 - **Self-healing**: restore on explicit request, on launcher exit, on crash/kill (lease
   watchdog), and when the target window disappears.
@@ -68,7 +68,6 @@ itself afterwards, so the extracted payload files can be removed.
 | Shortcut | Action |
 | :--- | :--- |
 | `Ctrl + Shift + H` | Toggle stealth (capture exclusion + taskbar/Alt+Tab) |
-| `Ctrl + Shift + B` | Toggle borderless |
 | `Ctrl + Shift + R` | Restore all tracked windows |
 | `Ctrl + Shift + M` | Show / hide the GhostFrame window |
 | `Ctrl + Shift + Down` | Minimize the selected target |
@@ -114,7 +113,7 @@ You can also open `GhostFrame.slnx` in Visual Studio and build the launcher proj
 
 | Test | What it covers | Where it runs |
 | :--- | :--- | :--- |
-| `GfAgentHost.exe <agent.dll>` | Agent in-process: attach, hide/show, guard re-assertion, taskbar styles, borderless, bootstrap de-duplication, attach→command handshake, lease watchdog, self-detach (35 assertions) | Everywhere, no injection needed |
+| `GfAgentHost.exe <agent.dll>` | Agent in-process: attach, hide/show, guard re-assertion, taskbar styles, untouched window frame, bootstrap de-duplication, attach→command handshake, lease watchdog, self-detach (36 assertions) | Everywhere, no injection needed |
 | `GfTestTarget.exe` + `GhostFrame.exe --selftest` | Full pipeline including cross-process injection | Normal desktop; blocked by some sandboxes/EDR |
 
 ```powershell

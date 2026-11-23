@@ -155,10 +155,29 @@ DWORD WINAPI DriverThread(LPVOID parameter) {
     Check((::GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0,
           L"taskbar style restored");
 
-    Check(host->ipc.Send(gf::Cmd::BorderlessOn, 3000), L"borderless on acknowledged");
-    Check((::GetWindowLongPtrW(window, GWL_STYLE) & WS_CAPTION) == 0, L"caption removed");
-    Check(host->ipc.Send(gf::Cmd::BorderlessOff, 3000), L"borderless off acknowledged");
-    Check((::GetWindowLongPtrW(window, GWL_STYLE) & WS_CAPTION) != 0, L"caption restored");
+    // 1.6: the agent must never touch the window frame.  Capture the style,
+    // ex-style and rect, hide and show the window again, and require them to
+    // come back unchanged (only the taskbar ex-style bits may differ, and they
+    // were just restored above).
+    const LONG_PTR styleBefore = ::GetWindowLongPtrW(window, GWL_STYLE);
+    const LONG_PTR exStyleBefore = ::GetWindowLongPtrW(window, GWL_EXSTYLE);
+    RECT rectBefore = {};
+    ::GetWindowRect(window, &rectBefore);
+
+    Check(host->ipc.Send(gf::Cmd::Hide, 3000), L"hide for the frame check acknowledged");
+    Check(host->ipc.Send(gf::Cmd::Show, 3000), L"show for the frame check acknowledged");
+    ::Sleep(250);
+
+    RECT rectAfter = {};
+    ::GetWindowRect(window, &rectAfter);
+    Check(::GetWindowLongPtrW(window, GWL_STYLE) == styleBefore, L"frame style untouched");
+    Check((::GetWindowLongPtrW(window, GWL_EXSTYLE) &
+           ~static_cast<LONG_PTR>(WS_EX_APPWINDOW | WS_EX_TOOLWINDOW)) ==
+              (exStyleBefore & ~static_cast<LONG_PTR>(WS_EX_APPWINDOW | WS_EX_TOOLWINDOW)),
+          L"non-taskbar ex-style untouched");
+    Check(rectBefore.left == rectAfter.left && rectBefore.top == rectAfter.top &&
+              rectBefore.right == rectAfter.right && rectBefore.bottom == rectAfter.bottom,
+          L"window rect untouched");
 
     // From here on affinity values are compared exactly, so stop the window's
     // own reset timer from racing the checks.

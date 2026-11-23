@@ -43,10 +43,8 @@ public:
 
     bool IsAlive() const { return root_ && ::IsWindow(root_) != FALSE; }
     bool IsHidden() const { return hidden_; }
-    bool IsBorderless() const { return borderless_; }
 
     DWORD SetHidden(bool on, Taskbar& taskbar);
-    DWORD SetBorderless(bool on);
     DWORD RestoreAll(Taskbar& taskbar);
 
     // Re-asserts the invariants while hidden.  Returns the last Win32 error.
@@ -60,7 +58,6 @@ private:
     HWND root_ = nullptr;
 
     bool hidden_ = false;
-    bool borderless_ = false;
 
     bool haveWda_ = false;
     DWORD savedWda_ = 0;
@@ -68,10 +65,6 @@ private:
     bool haveExStyle_ = false;
     LONG_PTR savedExStyle_ = 0;
     LONG_PTR exStyleMask_ = 0;
-
-    bool haveStyle_ = false;
-    LONG_PTR savedStyle_ = 0;
-    LONG_PTR styleMask_ = 0;
 };
 
 }  // namespace gf::agent

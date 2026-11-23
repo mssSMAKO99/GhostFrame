@@ -40,7 +40,6 @@ private:
     void SelectTarget(int index);
     void AttachForeground(bool hideAfter);
     void ToggleStealth(int index);
-    void ToggleBorderless(int index);
     void RestoreAll();
     void TargetShow(int command);
     void TargetClose();

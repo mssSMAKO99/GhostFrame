@@ -10,7 +10,6 @@
 
 // Commands (shared by the child buttons and the global hotkeys)
 #define ID_BTN_TOGGLE 1001
-#define ID_BTN_BORDER 1002
 #define ID_BTN_RESTORE_ALL 1003
 #define ID_BTN_MIN 1004
 #define ID_BTN_RESTORE 1005

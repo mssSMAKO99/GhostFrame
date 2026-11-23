@@ -8,9 +8,6 @@ namespace {
 
 constexpr DWORD kWdaExclude = 0x00000011;  // WDA_EXCLUDEFROMCAPTURE
 
-constexpr LONG_PTR kFrameMask =
-    WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
-
 constexpr LONG_PTR kTaskbarMask = WS_EX_APPWINDOW | WS_EX_TOOLWINDOW;
 
 void FrameChanged(HWND hwnd) {
@@ -152,41 +149,6 @@ DWORD WindowState::SetHidden(bool on, Taskbar& taskbar) {
     return error;
 }
 
-DWORD WindowState::SetBorderless(bool on) {
-    if (!root_ || !::IsWindow(root_)) {
-        return ERROR_INVALID_WINDOW_HANDLE;
-    }
-    if (on == borderless_) {
-        return 0;
-    }
-
-    const bool wasZoomed = ::IsZoomed(root_) != FALSE;
-    if (wasZoomed) {
-        ::ShowWindow(root_, SW_RESTORE);
-    }
-
-    if (on) {
-        savedStyle_ = ::GetWindowLongPtrW(root_, GWL_STYLE);
-        styleMask_ = kFrameMask;
-        haveStyle_ = true;
-
-        LONG_PTR style = savedStyle_ & ~styleMask_;
-        ::SetWindowLongPtrW(root_, GWL_STYLE, style);
-    } else if (haveStyle_) {
-        LONG_PTR style = ::GetWindowLongPtrW(root_, GWL_STYLE);
-        ::SetWindowLongPtrW(root_, GWL_STYLE, (style & ~styleMask_) | (savedStyle_ & styleMask_));
-    }
-
-    ApplyFrame();
-
-    if (wasZoomed) {
-        ::ShowWindow(root_, SW_MAXIMIZE);
-    }
-
-    borderless_ = on;
-    return 0;
-}
-
 DWORD WindowState::Enforce() {
     if (!root_ || !::IsWindow(root_)) {
         return ERROR_INVALID_WINDOW_HANDLE;
@@ -211,27 +173,13 @@ DWORD WindowState::Enforce() {
         }
     }
 
-    if (borderless_) {
-        LONG_PTR style = ::GetWindowLongPtrW(root_, GWL_STYLE);
-        if ((style & styleMask_) != 0) {
-            ::SetWindowLongPtrW(root_, GWL_STYLE, style & ~styleMask_);
-            ApplyFrame();
-        }
-    }
-
     return error;
 }
 
 DWORD WindowState::RestoreAll(Taskbar& taskbar) {
     DWORD error = 0;
-    if (borderless_) {
-        error = SetBorderless(false);
-    }
     if (hidden_) {
-        DWORD hiddenError = SetHidden(false, taskbar);
-        if (error == 0) {
-            error = hiddenError;
-        }
+        error = SetHidden(false, taskbar);
     }
     return error;
 }

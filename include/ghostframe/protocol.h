@@ -17,18 +17,21 @@ namespace gf {
 inline constexpr wchar_t kAttachMessageName[] = L"GhostFrame.Attach.v2";
 
 // Shared memory layout.
-inline constexpr uint32_t kStateMagic = 0x32465347u;  // 'GSF2'
-inline constexpr uint32_t kStateVersion = 2u;
+//
+// Version 3 dropped the old frame-mode command/status/flag values.  The agent
+// never modifies the window frame any more, so those numbers are gone.  Do not
+// reuse them: an old agent that somehow survives keeps its own layout and
+// version, and a mismatch is rejected when the state block is opened.
+inline constexpr uint32_t kStateMagic = 0x33465347u;  // 'GSF3'
+inline constexpr uint32_t kStateVersion = 3u;
 
 enum class Cmd : LONG {
     None = 0,
     Hide = 1,
     Show = 2,
-    BorderlessOn = 3,
-    BorderlessOff = 4,
-    RestoreAll = 5,
-    Ping = 6,
-    Uninstall = 7,
+    RestoreAll = 3,
+    Ping = 4,
+    Uninstall = 5,
 };
 
 enum class Status : LONG {
@@ -36,18 +39,15 @@ enum class Status : LONG {
     Attached = 1,
     Hidden = 2,
     Visible = 3,
-    BorderlessOn = 4,
-    BorderlessOff = 5,
-    Error = 6,
-    Leaving = 7,
-    Detached = 8,
+    Error = 4,
+    Leaving = 5,
+    Detached = 6,
 };
 
 enum Flags : LONG {
     FlagAttached = 1 << 0,
     FlagHidden = 1 << 1,
-    FlagBorderless = 1 << 2,
-    FlagLeaseLost = 1 << 3,
+    FlagLeaseLost = 1 << 2,
 };
 
 struct SharedState {
