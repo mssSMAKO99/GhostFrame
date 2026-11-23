@@ -1,0 +1,74 @@
+name: Pages
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # install.ps1 is served verbatim (and stays ASCII-only / BOM-less), plus a
+      # tiny landing page so the Pages root is not a 404.
+      - name: Stage Pages content
+        run: |
+          set -e
+          rm -rf _site
+          mkdir -p _site
+          cp install.ps1 _site/install.ps1
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>GhostFrame</title>
+          <style>
+          body { font-family: Segoe UI, system-ui, sans-serif; background: #0f1115; color: #e8eaed;
+                 max-width: 44rem; margin: 4rem auto; padding: 0 1.25rem; line-height: 1.6; }
+          h1 { font-weight: 600; }
+          code, pre { font-family: Consolas, ui-monospace, monospace; }
+          pre { background: #1b1f27; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+          a { color: #7cb7ff; }
+          </style>
+          </head>
+          <body>
+          <h1>GhostFrame</h1>
+          <p>Window capture exclusion for Windows 10/11. Install from PowerShell:</p>
+          <pre>irm https://mssSMAKO99.github.io/GhostFrame/install.ps1 | iex</pre>
+          <p>The binary lives on the <a href="https://github.com/mssSMAKO99/GhostFrame/releases">releases page</a>.</p>
+          </body>
+          </html>
+          HTML
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

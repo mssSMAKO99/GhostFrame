@@ -184,6 +184,8 @@ read-only or redirected profiles).
 .\build.ps1                 # Release -> dist\GhostFrame.exe
 .\build.ps1 -Configuration Debug
 .\build.ps1 -SkipTests      # only the product, no test binaries
+.\build.ps1 -Test           # build, then run the harnesses and the self-test
+.\build.ps1 -Clean          # remove build\ and dist\
 ```
 
 The script locates MSBuild through `vswhere` and works with Visual Studio 2022 (v143) and
@@ -191,19 +193,63 @@ Visual Studio 2026 (v145); the toolset is selected automatically by `msbuild/Too
 The launcher project builds the x64/x86 agent and the 32-bit helper itself and embeds them
 as `RCDATA`, so there is no manual five-step build order any more.
 
-`dist\` holds only `GhostFrame.exe`. The test binaries stay next to the build output, in
-`build\out\x64\<Configuration>\`.
+The version is read from `include/ghostframe/version.h`. `dist\` ends up with
+`GhostFrame.exe`, a pinned `GhostFrame-<version>.exe`, `GhostFrame.exe.sha256` and a
+`GhostFrame-<version>.zip` (the release artifact). The test binaries stay next to the
+build output, in `build\out\x64\<Configuration>\`.
 
 You can also open `GhostFrame.slnx` in Visual Studio and build the launcher project.
 
-## Install and uninstall
+## Install
 
-GhostFrame is portable: there is nothing to install. Copy `dist\GhostFrame.exe` anywhere
-and run it. The only thing it writes outside that folder is `%LOCALAPPDATA%\GhostFrame\`
-(`settings.json`, the extracted payloads and the log).
+On Windows 10/11 with PowerShell 5.1 or newer, one line is enough:
 
-To remove it: exit GhostFrame (so every target is restored), delete `GhostFrame.exe` and
-`%LOCALAPPDATA%\GhostFrame\`. No registry keys, services or scheduled tasks are created.
+```powershell
+irm https://mssSMAKO99.github.io/GhostFrame/install.ps1 | iex
+```
+
+The script downloads the latest release from GitHub Releases, checks its SHA-256,
+installs it to `%LOCALAPPDATA%\GhostFrame\bin`, adds a Start Menu shortcut and starts
+it. It never asks for administrator rights and never needs `-ExecutionPolicy Bypass`.
+
+To verify before running anything, download `install.ps1`, read it and pass options:
+
+```powershell
+.\install.ps1 -Version v2.0.0        # pin a release instead of latest
+.\install.ps1 -NoRun                 # install without starting it
+.\install.ps1 -InstallDir C:\Tools\GhostFrame
+.\install.ps1 -Uninstall             # stop it, remove program, shortcut and data
+```
+
+`-Uninstall` removes `GhostFrame.exe`, the Start Menu shortcut and everything under
+`%LOCALAPPDATA%\GhostFrame\` (`settings.json`, the extracted payloads and the log).
+
+### Manual install
+
+GhostFrame is portable: copy `dist\GhostFrame.exe` anywhere and run it. The only thing
+it writes outside that folder is `%LOCALAPPDATA%\GhostFrame\` (`settings.json`, the
+extracted payloads and the log). Remove it by exiting GhostFrame (so every target is
+restored) and deleting `GhostFrame.exe` and `%LOCALAPPDATA%\GhostFrame\`. No registry
+keys, services or scheduled tasks are created.
+
+### Why not pure PowerShell
+
+The capture exclusion has to run *inside* the target process (`SetWindowDisplayAffinity`
+only affects the calling process) and `SetWindowsHookEx` needs a native DLL with an
+export. A managed `Add-Type` assembly has no native exports, so the agent stays a native
+DLL and PowerShell is only an installer/launcher on top of the built `GhostFrame.exe`.
+
+> **Trust note.** `irm ... | iex` executes code straight from the network. GhostFrame is
+> not code-signed, so AMSI/Defender or a corporate policy may block it and SmartScreen
+> shows "unknown publisher". The installer checks the download against the SHA-256
+> published in the release and warns when the binary is unsigned. If you want certainty,
+> download `install.ps1` and `GhostFrame.exe.sha256` from the release page and compare
+> them yourself before running anything.
+
+> **Enabling Pages.** `install.ps1` is served by GitHub Pages, which must be switched to
+> the "GitHub Actions" source once in the repository settings; the `pages.yml` workflow
+> deploys it. The binary itself is always on the Releases page, never on Pages
+> (`application/octet-stream` would corrupt it).
 
 ## Tests
 
@@ -218,12 +264,23 @@ $env:GF_PAYLOAD_ROOT = "$PWD\build\payload\Release"   # optional: extract payloa
 .\build\out\x64\Release\GfAgentHost.exe .\build\payload\Release\GhostFrameAgent64.dll
 ```
 
+`build.ps1 -Test` runs `GfAgentHost`, `GfSettingsHost` and — when a `GfTestTarget` process
+is running — the end-to-end self-test, so a local build is checked in one command.
+
+The installer is verified the same way: a correct download and SHA-256 succeeds, a mismatched
+hash aborts and deletes the partial download, `-Uninstall` removes the program, the Start Menu
+shortcut and `%LOCALAPPDATA%\GhostFrame\`, and re-installing over an existing copy works.
+None of it needs administrator rights.
+
 ## Project layout
 
 ```
 GhostFrame.slnx
 Directory.Build.props        common paths and output layout
 msbuild/                     shared compiler/toolset props
+build.ps1                    build entry point (-Test, -Clean, artifact + sha256 + zip)
+install.ps1                  one-line installer served by GitHub Pages
+.github/workflows/           build.yml (CI + release), pages.yml (install.ps1 hosting)
 include/ghostframe/          protocol + version, shared by launcher and agent
 src/agent/                   injected DLL (x64 and x86), no CRT dependency beyond system DLLs
 src/helper/                  32-bit one-shot bootstrap executable

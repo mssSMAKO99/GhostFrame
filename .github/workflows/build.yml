@@ -7,29 +7,57 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only by default; only the release job is granted write access.
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # A release tag must agree with include/ghostframe/version.h, so the asset
+      # name, the release name and the stamped VERSIONINFO cannot drift apart.
+      - name: Check the tag against version.h
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $text = Get-Content include/ghostframe/version.h -Raw
+          $parts = foreach ($field in 'MAJOR', 'MINOR', 'PATCH') {
+            $match = [regex]::Match($text, "GF_VERSION_$field\s+(\d+)")
+            if (-not $match.Success) { throw "GF_VERSION_$field missing from version.h" }
+            $match.Groups[1].Value
+          }
+          $header = $parts -join '.'
+          if ($tag -ne $header) {
+            throw "tag v$tag does not match version.h ($header)"
+          }
+          Write-Host "version $header matches tag v$tag"
+
       - name: Build
         shell: cmd
         run: powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 
-      - name: Agent harness (deterministic)
+      - name: Harnesses (deterministic)
         shell: pwsh
         run: |
           .\build\out\x64\Release\GfAgentHost.exe (Resolve-Path .\build\payload\Release\GhostFrameAgent64.dll).Path
           if ($LASTEXITCODE -ne 0) { throw "agent harness failed with $LASTEXITCODE" }
+          .\build\out\x64\Release\GfSettingsHost.exe
+          if ($LASTEXITCODE -ne 0) { throw "settings harness failed with $LASTEXITCODE" }
 
       # Full end-to-end injection test.  Cross-process hooks are blocked on some
-      # hardened CI images, so this step is informative rather than gating.
+      # hardened CI images, so a non-zero exit is reported as a warning with the
+      # code and the log instead of being silently swallowed.
       - name: Injection smoke test
         continue-on-error: true
         shell: pwsh
@@ -44,23 +72,46 @@ jobs:
               -RedirectStandardError "$env:TEMP\selftest.err"
           $code = $self.ExitCode
           Stop-Process -Id $target.Id -Force -ErrorAction SilentlyContinue
-          if (Test-Path "$env:TEMP\GhostFrame.selftest.log") {
-            Get-Content "$env:TEMP\GhostFrame.selftest.log"
+          foreach ($log in "$env:TEMP\GhostFrame.selftest.log", "$env:TEMP\GhostFrame\ghostframe.log") {
+            if (Test-Path $log) { Get-Content $log }
           }
-          if (Test-Path "$env:TEMP\GhostFrame\ghostframe.log") {
-            Get-Content "$env:TEMP\GhostFrame\ghostframe.log"
+          if ($code -eq 0) {
+            Write-Host "self-test passed"
+          } else {
+            Write-Host "::warning title=Self-test did not pass::GhostFrame.exe --selftest exited with code $code on this runner; cross-process hooks are often blocked in CI."
           }
-          exit $code
+          exit 0
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
           name: GhostFrame-x64
-          path: dist/GhostFrame.exe
+          path: dist/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: GhostFrame-x64
+          path: dist
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/GhostFrame.exe
+          files: |
+            dist/GhostFrame.exe
+            dist/GhostFrame.exe.sha256
+            dist/GhostFrame-*.zip
+            install.ps1
           generate_release_notes: true
