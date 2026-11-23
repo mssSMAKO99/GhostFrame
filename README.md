@@ -262,7 +262,7 @@ DLL and PowerShell is only an installer/launcher on top of the built `GhostFrame
 > (`application/octet-stream` would corrupt it).
 >
 > The short URL `https://mssSMAKO99.github.io/install.ps1` is published to the profile
-> site repository (`mssSMAKO99/mssSMAKO99.github.io`) by
+> site repository (`mssSMAKO99/msssmako99.github.io`) by
 > `publish-installer.yml`. It needs a repository secret named `GF`: a fine-grained
 > personal access token with **Contents: read and write** on that profile repository.
 > Without the secret the workflow warns and skips; the `/GhostFrame/install.ps1` mirror
