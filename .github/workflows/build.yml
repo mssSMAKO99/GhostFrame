@@ -2,8 +2,8 @@ name: Build GhostFrame
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v*" ]
+    branches: [ "main", "main-v2" ]
+    tags: [ "v*", "[0-9]*" ]
   pull_request:
   workflow_dispatch:
 
@@ -26,22 +26,30 @@ jobs:
 
       # A release tag must agree with include/ghostframe/version.h, so the asset
       # name, the release name and the stamped VERSIONINFO cannot drift apart.
+      # Compared numerically and padded to four parts, so 2.0.0.0, v2.0.0.0 and
+      # v2.0.0 are all the same version; the project's tags are numeric.
       - name: Check the tag against version.h
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
-          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $tag = '${{ github.ref_name }}'
           $text = Get-Content include/ghostframe/version.h -Raw
-          $parts = foreach ($field in 'MAJOR', 'MINOR', 'PATCH') {
+          $fields = foreach ($field in 'MAJOR', 'MINOR', 'PATCH', 'BUILD') {
             $match = [regex]::Match($text, "GF_VERSION_$field\s+(\d+)")
             if (-not $match.Success) { throw "GF_VERSION_$field missing from version.h" }
             $match.Groups[1].Value
           }
-          $header = $parts -join '.'
-          if ($tag -ne $header) {
-            throw "tag v$tag does not match version.h ($header)"
+          function Get-Parts([string]$value) {
+            $parts = @($value.TrimStart('v') -split '\.' | ForEach-Object { [int]($_ -replace '\D', '') })
+            while ($parts.Count -lt 4) { $parts += 0 }
+            return $parts[0..3]
           }
-          Write-Host "version $header matches tag v$tag"
+          $tagNorm = (Get-Parts $tag) -join '.'
+          $headerNorm = (Get-Parts ($fields -join '.')) -join '.'
+          if ($tagNorm -ne $headerNorm) {
+            throw "tag $tag does not match version.h ($($fields -join '.'))"
+          }
+          Write-Host "version $headerNorm matches tag $tag"
 
       - name: Build
         shell: cmd

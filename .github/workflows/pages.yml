@@ -2,7 +2,7 @@ name: Pages
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "main-v2" ]
   workflow_dispatch:
 
 permissions:
