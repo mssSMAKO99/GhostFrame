@@ -1,10 +1,10 @@
 name: Publish installer
 
 # Copies install.ps1 into the root of the profile site repository
-# (mssSMAKO99/msssmako99.github.io) as `gf` (no extension) plus a descriptive
-# `install.ps1` alias, so the short command works:
+# (mssSMAKO99/msssmako99.github.io) as `gf` (no extension), so the short
+# command works:
 #
-#   irm https://mssSMAKO99.github.io/gf | iex
+#   irm mssSMAKO99.github.io/gf | iex
 #
 # The GitHub token that belongs to this repository cannot write to another
 # repository.  Add a repository secret named GF with a fine-grained personal
@@ -85,13 +85,12 @@ jobs:
         run: |
           set -euo pipefail
           cp ../install.ps1 gf
-          cp ../install.ps1 install.ps1
-          if git diff --quiet -- gf install.ps1 && git diff --cached --quiet -- gf install.ps1; then
+          if git diff --quiet -- gf && git diff --cached --quiet -- gf; then
             echo "gf is already up to date"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add gf install.ps1
+          git add gf
           git commit -m "chore: publish GhostFrame installer (gf) from GhostFrame@${GITHUB_SHA::7}"
           git push origin HEAD:main
