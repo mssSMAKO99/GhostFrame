@@ -44,6 +44,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <PreprocessorDefinitions>_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(GF_SolutionDir)src\core;$(GF_SolutionDir)src\daemon;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ResourceCompile>
       <AdditionalIncludeDirectories>$(GF_SolutionDir)include;$(GF_PayloadDir);$(MSBuildProjectDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -51,7 +52,7 @@
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>user32.lib;gdi32.lib;gdiplus.lib;shell32.lib;ole32.lib;bcrypt.lib;comdlg32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;gdiplus.lib;msimg32.lib;shell32.lib;ole32.lib;bcrypt.lib;comdlg32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <AdditionalManifestFiles>$(MSBuildProjectDirectory)\app.manifest</AdditionalManifestFiles>
@@ -61,37 +62,40 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="app.cpp" />
-    <ClCompile Include="injector.cpp" />
+    <ClCompile Include="..\daemon\daemon.cpp" />
     <ClCompile Include="icons.cpp" />
-    <ClCompile Include="ipc_client.cpp" />
-    <ClCompile Include="log.cpp" />
+    <ClCompile Include="plugins.cpp" />
     <ClCompile Include="selftest.cpp" />
-    <ClCompile Include="session.cpp" />
-    <ClCompile Include="settings.cpp" />
     <ClCompile Include="settings_view.cpp" />
+    <ClCompile Include="shortcuts_view.cpp" />
     <ClCompile Include="targets_view.cpp" />
     <ClCompile Include="ui.cpp" />
-    <ClCompile Include="window_list.cpp" />
+    <ClCompile Include="view.cpp" />
     <ClCompile Include="windows_view.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="app.h" />
-    <ClInclude Include="injector.h" />
+    <ClInclude Include="..\daemon\daemon.h" />
     <ClInclude Include="icons.h" />
-    <ClInclude Include="ipc_client.h" />
-    <ClInclude Include="log.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="selftest.h" />
-    <ClInclude Include="session.h" />
-    <ClInclude Include="settings.h" />
+    <ClInclude Include="settings_view.h" />
+    <ClInclude Include="shortcuts_view.h" />
+    <ClInclude Include="targets_view.h" />
     <ClInclude Include="ui.h" />
-    <ClInclude Include="window_list.h" />
+    <ClInclude Include="view.h" />
+    <ClInclude Include="windows_view.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="app.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\core\GhostFrame.Core.vcxproj">
+      <Project>{6C1B4E7A-0002-4C55-9E3A-7F0D2B1A0002}</Project>
+    </ProjectReference>
   </ItemGroup>
 
   <!--

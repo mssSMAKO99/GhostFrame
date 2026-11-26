@@ -2,8 +2,8 @@
 // Included by C++ code and by the resource compiler.
 #pragma once
 
-#define GF_VERSION_MAJOR 2
-#define GF_VERSION_MINOR 1
+#define GF_VERSION_MAJOR 3
+#define GF_VERSION_MINOR 0
 #define GF_VERSION_PATCH 0
 #define GF_VERSION_BUILD 0
 
@@ -23,3 +23,4 @@
 #define GF_VERSION_STRING4_A GF_VERSION_STRING_A "." GF_VERSION_STRINGIZE(GF_VERSION_BUILD)
 
 #define GF_VERSION_STRING L"" GF_VERSION_STRING_A
+#define GF_VERSION_STRING4 L"" GF_VERSION_STRING4_A

@@ -56,7 +56,7 @@ function Find-MSBuild {
 function Get-GfVersion {
     $header = Join-Path $root 'include\ghostframe\version.h'
     $text = Get-Content -LiteralPath $header -Raw
-    $parts = foreach ($field in 'MAJOR', 'MINOR', 'PATCH') {
+    $parts = foreach ($field in 'MAJOR', 'MINOR', 'PATCH', 'BUILD') {
         $match = [regex]::Match($text, "GF_VERSION_$field\s+(\d+)")
         if (-not $match.Success) {
             throw "GF_VERSION_$field not found in $header"
@@ -102,11 +102,13 @@ Write-Host "Version: $version"
 $buildTests = (-not $SkipTests) -or $Test
 
 Invoke-Build (Join-Path $root 'src\launcher\GhostFrame.Launcher.vcxproj') 'x64'
+Invoke-Build (Join-Path $root 'src\brand\GfBrand.vcxproj') 'x64'
 
 if ($buildTests) {
     Invoke-Build (Join-Path $root 'tests\target\GfTestTarget.vcxproj') 'x64'
     Invoke-Build (Join-Path $root 'tests\agent_host\GfAgentHost.vcxproj') 'x64'
     Invoke-Build (Join-Path $root 'tests\settings_host\GfSettingsHost.vcxproj') 'x64'
+    Invoke-Build (Join-Path $root 'tests\brand_host\GfBrandHost.vcxproj') 'x64'
 }
 
 $output = Join-Path $root "build\out\x64\$Configuration"
@@ -123,9 +125,18 @@ $hash = (Get-FileHash $canonical -Algorithm SHA256).Hash
 Set-Content -LiteralPath (Join-Path $dist 'GhostFrame.exe.sha256') `
     -Value "$hash  GhostFrame.exe" -Encoding Ascii
 
+# GfBrand is a separate helper so installer branding never needs a source tree.
+$brand = Join-Path $output 'GfBrand.exe'
+$brandDist = Join-Path $dist 'GfBrand.exe'
+Copy-Item $brand $brandDist -Force
+$brandHash = (Get-FileHash $brandDist -Algorithm SHA256).Hash
+Set-Content -LiteralPath (Join-Path $dist 'GfBrand.exe.sha256') `
+    -Value "$brandHash  GfBrand.exe" -Encoding Ascii
+
 # A zip keeps the release artifact intact in transit and is what CI uploads.
 $zip = Join-Path $dist "GhostFrame-$version.zip"
-$zipItems = @($canonical, (Join-Path $dist 'GhostFrame.exe.sha256'))
+$zipItems = @($canonical, (Join-Path $dist 'GhostFrame.exe.sha256'),
+              $brandDist, (Join-Path $dist 'GfBrand.exe.sha256'))
 foreach ($extra in 'install.ps1', 'README.md', 'LICENSE') {
     $candidate = Join-Path $root $extra
     if (Test-Path $candidate) {
@@ -141,12 +152,14 @@ if ($buildTests) {
     Write-Host "  $testOutput\GfTestTarget.exe"
     Write-Host "  $testOutput\GfAgentHost.exe"
     Write-Host "  $testOutput\GfSettingsHost.exe"
+    Write-Host "  $testOutput\GfBrandHost.exe"
 }
 
 if ($Test) {
     $agentDll = Join-Path $root "build\payload\$Configuration\GhostFrameAgent64.dll"
     Invoke-Harness (Join-Path $testOutput 'GfAgentHost.exe') @($agentDll)
     Invoke-Harness (Join-Path $testOutput 'GfSettingsHost.exe') @()
+    Invoke-Harness (Join-Path $testOutput 'GfBrandHost.exe') @()
 
     $target = Get-Process -Name 'GfTestTarget' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($target) {
@@ -165,5 +178,7 @@ if ($Test) {
 Write-Host ''
 Write-Host 'Artifact:  dist\GhostFrame.exe'
 Write-Host "Versioned: dist\GhostFrame-$version.exe"
+Write-Host 'Branding:  dist\GfBrand.exe'
 Write-Host "Archive:   dist\GhostFrame-$version.zip"
 Write-Host "SHA256:    $hash"
+Write-Host "Brand SHA: $brandHash"

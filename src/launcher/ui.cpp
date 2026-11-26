@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 
+#include <algorithm>
+
 namespace ui {
 
 // ---------------------------------------------------------------------------
@@ -32,28 +34,163 @@ COLORREF kOnAccent = RGB(4, 19, 11);
 
 namespace {
 
-void ApplyDarkPalette() {
-    kBg = RGB(7, 12, 10);
-    kSidebar = RGB(10, 17, 14);
-    kTopBar = RGB(9, 15, 12);
-    kPanel = RGB(14, 22, 18);
-    kPanelHi = RGB(20, 31, 26);
-    kPanelHover = RGB(25, 39, 32);
-    kBorder = RGB(30, 44, 37);
-    kBorderHi = RGB(43, 62, 52);
-    kNeon = RGB(47, 226, 123);
-    kNeonBg = RGB(14, 42, 29);
-    kNeonDim = RGB(21, 154, 85);
-    kNeonSoft = RGB(23, 57, 40);
-    kText = RGB(232, 243, 236);
-    kMuted = RGB(139, 156, 147);
-    kTextDim = RGB(95, 111, 104);
-    kWarn = RGB(255, 93, 104);
-    kWarnBg = RGB(42, 17, 20);
-    kFocus = RGB(127, 224, 174);
-    kDisabled = RGB(74, 88, 81);
-    kToastBg = RGB(22, 34, 28);
-    kOnAccent = RGB(4, 19, 11);
+struct Palette {
+    bool light = false;
+    COLORREF bg = RGB(7, 12, 10);
+    COLORREF sidebar = RGB(10, 17, 14);
+    COLORREF topBar = RGB(9, 15, 12);
+    COLORREF panel = RGB(14, 22, 18);
+    COLORREF panelHi = RGB(20, 31, 26);
+    COLORREF panelHover = RGB(25, 39, 32);
+    COLORREF border = RGB(30, 44, 37);
+    COLORREF borderHi = RGB(43, 62, 52);
+    COLORREF accent = RGB(47, 226, 123);
+    COLORREF neonBg = RGB(14, 42, 29);
+    COLORREF neonDim = RGB(21, 154, 85);
+    COLORREF neonSoft = RGB(23, 57, 40);
+    COLORREF focus = RGB(127, 224, 174);
+    COLORREF onAccent = RGB(4, 19, 11);
+    COLORREF text = RGB(232, 243, 236);
+    COLORREF muted = RGB(139, 156, 147);
+    COLORREF textDim = RGB(95, 111, 104);
+    COLORREF warn = RGB(255, 93, 104);
+    COLORREF warnBg = RGB(42, 17, 20);
+    COLORREF disabled = RGB(74, 88, 81);
+    COLORREF toastBg = RGB(22, 34, 28);
+};
+
+// The original dark look.  These are the exact values the launcher used before
+// appearance settings existed, so the defaults render unchanged.
+Palette GraphitePalette() { return Palette{}; }
+
+Palette LightPalette() {
+    Palette p;
+    p.light = true;
+    p.bg = RGB(246, 248, 247);
+    p.sidebar = RGB(236, 240, 238);
+    p.topBar = RGB(250, 252, 251);
+    p.panel = RGB(255, 255, 255);
+    p.panelHi = RGB(242, 246, 244);
+    p.panelHover = RGB(232, 240, 235);
+    p.border = RGB(214, 223, 218);
+    p.borderHi = RGB(196, 208, 201);
+    p.accent = RGB(13, 138, 74);
+    p.neonBg = RGB(226, 242, 232);
+    p.neonDim = RGB(10, 110, 58);
+    p.neonSoft = RGB(216, 236, 224);
+    p.focus = RGB(10, 110, 58);
+    p.onAccent = RGB(252, 255, 252);
+    p.text = RGB(22, 32, 27);
+    p.muted = RGB(88, 104, 96);
+    p.textDim = RGB(126, 140, 133);
+    p.warn = RGB(190, 38, 54);
+    p.warnBg = RGB(252, 232, 234);
+    p.disabled = RGB(160, 172, 165);
+    p.toastBg = RGB(255, 255, 255);
+    return p;
+}
+
+Palette MidnightPalette() {
+    Palette p;
+    p.bg = RGB(7, 11, 20);
+    p.sidebar = RGB(9, 14, 26);
+    p.topBar = RGB(8, 13, 24);
+    p.panel = RGB(13, 20, 34);
+    p.panelHi = RGB(19, 28, 46);
+    p.panelHover = RGB(25, 36, 58);
+    p.border = RGB(31, 44, 68);
+    p.borderHi = RGB(45, 62, 92);
+    p.accent = RGB(82, 168, 255);
+    p.neonBg = RGB(16, 32, 54);
+    p.neonDim = RGB(64, 132, 206);
+    p.neonSoft = RGB(24, 44, 70);
+    p.focus = RGB(150, 200, 255);
+    p.onAccent = RGB(6, 13, 24);
+    p.text = RGB(230, 238, 252);
+    p.muted = RGB(142, 158, 184);
+    p.textDim = RGB(100, 116, 146);
+    p.warn = RGB(255, 110, 120);
+    p.warnBg = RGB(44, 20, 28);
+    p.disabled = RGB(78, 92, 116);
+    p.toastBg = RGB(18, 27, 44);
+    return p;
+}
+
+int Luminance(COLORREF color) {
+    return (GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114) / 1000;
+}
+
+// Keep the accent distinguishable from the surface it is drawn on.
+COLORREF EnsureAccentContrast(COLORREF accent, COLORREF background, bool light) {
+    if (Luminance(accent) - Luminance(background) > 90 ||
+        Luminance(background) - Luminance(accent) > 90) {
+        return accent;
+    }
+    return Blend(accent, light ? RGB(0, 0, 0) : RGB(255, 255, 255), 45);
+}
+
+// A custom background must sit on the same side of the light/dark divide as the
+// theme, otherwise the page title and footer would lose contrast.
+COLORREF ClampBackgroundToTheme(COLORREF color, bool light) {
+    int luminance = Luminance(color);
+    for (int i = 0; i < 8; ++i) {
+        if (light ? luminance >= 170 : luminance <= 88) {
+            break;
+        }
+        color = Blend(color, light ? RGB(255, 255, 255) : RGB(0, 0, 0), 18);
+        luminance = Luminance(color);
+    }
+    return color;
+}
+
+bool SystemUsesLightTheme() {
+    DWORD value = 1;
+    DWORD size = sizeof(value);
+    if (::RegGetValueW(HKEY_CURRENT_USER,
+                       L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                       L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) !=
+        ERROR_SUCCESS) {
+        return true;
+    }
+    return value != 0;
+}
+
+void ApplyPalette(const Palette& palette, const gf::AppearanceSettings& appearance) {
+    kBg = palette.bg;
+    kSidebar = palette.sidebar;
+    kTopBar = palette.topBar;
+    kPanel = palette.panel;
+    kPanelHi = palette.panelHi;
+    kPanelHover = palette.panelHover;
+    kBorder = palette.border;
+    kBorderHi = palette.borderHi;
+    kText = palette.text;
+    kMuted = palette.muted;
+    kTextDim = palette.textDim;
+    kWarn = palette.warn;
+    kWarnBg = palette.warnBg;
+    kDisabled = palette.disabled;
+    kToastBg = palette.toastBg;
+
+    if (appearance.customAccent) {
+        const COLORREF accent =
+            EnsureAccentContrast(appearance.accent, palette.panel, palette.light);
+        kNeon = accent;
+        kNeonBg = Blend(palette.panel, accent, palette.light ? 16 : 16);
+        kNeonDim = palette.light ? Blend(accent, RGB(0, 0, 0), 22)
+                                 : Blend(accent, palette.bg, 32);
+        kNeonSoft = Blend(palette.panel, accent, palette.light ? 9 : 10);
+        kFocus = palette.light ? Blend(accent, RGB(0, 0, 0), 12)
+                               : Blend(accent, RGB(255, 255, 255), 35);
+        kOnAccent = Luminance(accent) >= 150 ? RGB(6, 14, 9) : RGB(252, 255, 252);
+    } else {
+        kNeon = palette.accent;
+        kNeonBg = palette.neonBg;
+        kNeonDim = palette.neonDim;
+        kNeonSoft = palette.neonSoft;
+        kFocus = palette.focus;
+        kOnAccent = palette.onAccent;
+    }
 }
 
 // High contrast: fall back to the system palette so custom drawing stays
@@ -230,14 +367,67 @@ bool SystemHighContrast() {
     return false;
 }
 
-void Theme::Create(UINT dpiValue) {
+void Theme::Create(UINT dpiValue) { Create(dpiValue, gf::AppearanceSettings{}); }
+
+void Theme::Create(UINT dpiValue, const gf::AppearanceSettings& appearance) {
     Destroy();
     dpi = dpiValue != 0 ? dpiValue : 96;
     highContrast = SystemHighContrast();
+    compact = appearance.density == gf::DensityMode::Compact;
+
+    m = Metrics{};
+    if (compact) {
+        m.pad = 18;
+        m.gap = 8;
+        m.titleHeight = 52;
+        m.sidebarWidth = 188;
+        m.rowHeight = 44;
+        m.buttonHeight = 30;
+        m.tabHeight = 32;
+        m.tabWidth = 104;
+        m.settingsNavWidth = 160;
+        m.cornerRadius = 10;
+        m.cardRadius = 12;
+        m.controlRadius = 8;
+    }
+
+    gradientBackground = false;
     if (highContrast) {
         ApplySystemPalette();
+        backgroundTop = kBg;
+        backgroundBottom = kBg;
     } else {
-        ApplyDarkPalette();
+        Palette palette;
+        switch (appearance.theme) {
+            case gf::ThemePreset::Light:
+                palette = LightPalette();
+                break;
+            case gf::ThemePreset::Midnight:
+                palette = MidnightPalette();
+                break;
+            case gf::ThemePreset::System:
+                palette = SystemUsesLightTheme() ? LightPalette() : GraphitePalette();
+                break;
+            case gf::ThemePreset::Graphite:
+            default:
+                palette = GraphitePalette();
+                break;
+        }
+        ApplyPalette(palette, appearance);
+
+        gradientBackground = appearance.background == gf::BackgroundStyle::Gradient;
+        if (appearance.customBackground) {
+            backgroundTop = ClampBackgroundToTheme(appearance.backgroundTop, palette.light);
+            backgroundBottom = gradientBackground
+                                   ? ClampBackgroundToTheme(appearance.backgroundBottom,
+                                                            palette.light)
+                                   : backgroundTop;
+        } else {
+            backgroundTop = palette.bg;
+            backgroundBottom =
+                gradientBackground ? Blend(palette.bg, palette.panelHi, 70) : palette.bg;
+        }
+        kBg = backgroundTop;
     }
 
     const wchar_t* text = TextFace();
@@ -286,6 +476,51 @@ void FillSolid(HDC dc, const RECT& rect, COLORREF color) {
     HBRUSH brush = ::CreateSolidBrush(color);
     ::FillRect(dc, &rect, brush);
     ::DeleteObject(brush);
+}
+
+// A translucent wash, used to keep a background picture behind readable text.
+void FillSolidAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha) {
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0 || alpha == 0) {
+        return;
+    }
+
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = 1;
+    info.bmiHeader.biHeight = 1;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HDC memory = ::CreateCompatibleDC(dc);
+    HBITMAP bitmap = ::CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (memory == nullptr || bitmap == nullptr || bits == nullptr) {
+        if (bitmap != nullptr) {
+            ::DeleteObject(bitmap);
+        }
+        if (memory != nullptr) {
+            ::DeleteDC(memory);
+        }
+        return;
+    }
+
+    // AlphaBlend expects a premultiplied source pixel.
+    const BYTE a = alpha;
+    const BYTE red = static_cast<BYTE>(GetRValue(color) * a / 255);
+    const BYTE green = static_cast<BYTE>(GetGValue(color) * a / 255);
+    const BYTE blue = static_cast<BYTE>(GetBValue(color) * a / 255);
+    *static_cast<DWORD*>(bits) = (static_cast<DWORD>(a) << 24) | (static_cast<DWORD>(red) << 16) |
+                                 (static_cast<DWORD>(green) << 8) | static_cast<DWORD>(blue);
+
+    HGDIOBJ old = ::SelectObject(memory, bitmap);
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    ::AlphaBlend(dc, rect.left, rect.top, width, height, memory, 0, 0, 1, 1, blend);
+    ::SelectObject(memory, old);
+    ::DeleteObject(bitmap);
+    ::DeleteDC(memory);
 }
 
 void FillVerticalGradient(HDC dc, const RECT& rect, COLORREF top, COLORREF bottom) {
@@ -1067,31 +1302,74 @@ void ListWidget::ColumnRects(int index, const Theme& theme, std::vector<RECT>& r
     if (right <= left) {
         return;
     }
+    const int available = right - left;
+
+    // Desired widths, with 0 marking a flexible column that grows to fill the
+    // remaining space.  When the row is too narrow for every column, trailing
+    // columns are dropped instead of being drawn past the card (which used to
+    // make fixed-width cells overlap the scrollbar and the neighbouring card).
+    std::vector<int> widths;
+    widths.reserve(columns_.size());
+    for (const ListColumn& column : columns_) {
+        widths.push_back(column.width < 0 ? 0 : theme.S(column.width));
+    }
+
+    const int minFlexWidth = theme.S(64);
+    for (;;) {
+        int fixed = 0;
+        int flexible = 0;
+        for (int width : widths) {
+            if (width > 0) {
+                fixed += width;
+            } else {
+                ++flexible;
+            }
+        }
+        const int needed = fixed + flexible * minFlexWidth;
+        if (needed <= available || widths.size() <= 1) {
+            break;
+        }
+        // Drop the right-most column so the remaining cells keep their column
+        // metadata (only a trailing column may disappear).
+        widths.pop_back();
+    }
 
     int fixed = 0;
     int flexible = 0;
-    for (const ListColumn& column : columns_) {
-        if (column.width < 0) {
-            ++flexible;
+    for (int width : widths) {
+        if (width > 0) {
+            fixed += width;
         } else {
-            fixed += theme.S(column.width);
+            ++flexible;
         }
     }
-    const int available = right - left;
+
     int flexWidth = 0;
     if (flexible > 0) {
         flexWidth = (available - fixed) / flexible;
-        if (flexWidth < theme.S(40)) {
-            flexWidth = theme.S(40);
+        if (flexWidth < 1) {
+            flexWidth = 1;
+        }
+    }
+
+    // Only fixed columns and they are wider than the row: scale everything down
+    // proportionally, keeping at least one pixel each.
+    if (flexible == 0 && fixed > available) {
+        const double scale = static_cast<double>(available) / static_cast<double>(fixed);
+        for (int& width : widths) {
+            width = (std::max)(1, static_cast<int>(width * scale));
         }
     }
 
     int x = left;
-    for (const ListColumn& column : columns_) {
-        const int width = column.width < 0 ? flexWidth : theme.S(column.width);
-        RECT cell = {x, row.top, x + width, row.bottom};
+    for (int width : widths) {
+        const int cellWidth = width > 0 ? width : flexWidth;
+        RECT cell = {x, row.top, x + cellWidth, row.bottom};
         rects.push_back(cell);
-        x += width;
+        x += cellWidth;
+        if (x >= right) {
+            break;
+        }
     }
 }
 

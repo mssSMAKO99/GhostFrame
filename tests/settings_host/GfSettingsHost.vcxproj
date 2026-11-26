@@ -44,17 +44,26 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <PreprocessorDefinitions>_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(GF_SolutionDir)src\launcher;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(GF_SolutionDir)src\core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;shell32.lib;ole32.lib;uuid.lib;d2d1.lib;d3d11.lib;dwrite.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="..\..\src\launcher\settings.cpp" />
+    <ClCompile Include="..\..\src\core\emoji_icon.cpp" />
+    <ClCompile Include="..\..\src\core\ipc\daemon_client.cpp" />
+    <ClCompile Include="..\..\src\core\ipc\pipe_client.cpp" />
+    <ClCompile Include="..\..\src\core\ipc\pipe_io.cpp" />
+    <ClCompile Include="..\..\src\core\json.cpp" />
+    <ClCompile Include="..\..\src\core\log.cpp" />
+    <ClCompile Include="..\..\src\core\self_delete.cpp" />
+    <ClCompile Include="..\..\src\core\self_delete_plan.cpp" />
+    <ClCompile Include="..\..\src\core\settings.cpp" />
+    <ClCompile Include="..\..\src\core\shortcuts.cpp" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

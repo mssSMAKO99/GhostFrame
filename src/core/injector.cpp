@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "log.h"
-#include "resource.h"
 
+#include "ghostframe/payload_ids.h"
 #include "ghostframe/session_id.h"
 
 #ifndef IMAGE_FILE_MACHINE_ARM64EC
@@ -194,6 +194,12 @@ bool DescribeProcess(DWORD pid, ProcessInfo& info, std::wstring& error) {
 
     info.integrity = IntegrityOf(process);
     info.arch = ArchitectureOf(process);
+
+    wchar_t image[1024] = {};
+    DWORD size = _countof(image);
+    if (::QueryFullProcessImageNameW(process, 0, image, &size)) {
+        info.exePath.assign(image, size);
+    }
 
     ::CloseHandle(process);
     return true;

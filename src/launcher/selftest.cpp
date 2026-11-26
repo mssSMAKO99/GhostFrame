@@ -4,9 +4,8 @@
 
 #include <string>
 
-#include "injector.h"
+#include "capture_service.h"
 #include "log.h"
-#include "session.h"
 
 namespace gf {
 
@@ -102,83 +101,81 @@ int RunSelfTest() {
         return 2;
     }
 
-    Injector injector;
+    CaptureService capture;
     std::wstring error;
-    if (!injector.Initialize(error)) {
+    if (!capture.Initialize(error)) {
         return Fail(L"payload preparation:", error);
     }
 
-    SessionManager sessions(injector);
-
-    if (!sessions.Attach(target, error)) {
-        injector.Shutdown();
+    if (!capture.Attach(target, error)) {
+        capture.Shutdown();
         return Fail(L"attach:", error);
     }
 
-    if (sessions.Send(0, Cmd::Hide, error) != SendOutcome::Ok) {
-        injector.Shutdown();
+    if (capture.Send(0, Cmd::Hide, error) != SendOutcome::Ok) {
+        capture.Shutdown();
         return Fail(L"hide:", error);
     }
 
     ::Sleep(1500);
 
     const TargetStats hidden = ReadTargetStats();
-    if (!sessions.At(0).hidden()) {
-        injector.Shutdown();
+    if (!capture.At(0).hidden()) {
+        capture.Shutdown();
         return Fail(L"the session is not marked as hidden");
     }
-    if (sessions.At(0).wda != 0x11) {
-        injector.Shutdown();
+    if (capture.At(0).wda != 0x11) {
+        capture.Shutdown();
         return Fail(L"the agent reports an unexpected display affinity");
     }
     if (!hidden.valid || hidden.samples == 0) {
-        injector.Shutdown();
+        capture.Shutdown();
         return Fail(L"the test target did not report any samples");
     }
     if (hidden.excluded * 2 < hidden.samples) {
-        injector.Shutdown();
+        capture.Shutdown();
         return Fail(L"the guard did not keep the window excluded (excluded=" +
                     std::to_wstring(hidden.excluded) + L", samples=" +
                     std::to_wstring(hidden.samples) + L")");
     }
 
-    if (sessions.Send(0, Cmd::Show, error) != SendOutcome::Ok) {
-        injector.Shutdown();
+    if (capture.Send(0, Cmd::Show, error) != SendOutcome::Ok) {
+        capture.Shutdown();
         return Fail(L"show:", error);
     }
 
     ::Sleep(1500);
     const TargetStats shown = ReadTargetStats();
-    if (sessions.At(0).hidden()) {
-        injector.Shutdown();
+    if (capture.At(0).hidden()) {
+        capture.Shutdown();
         return Fail(L"the session is still marked as hidden after show");
     }
 
     const unsigned long long sampledAfterShow = shown.samples - hidden.samples;
     const unsigned long long excludedAfterShow = shown.excluded - hidden.excluded;
     if (sampledAfterShow == 0) {
-        injector.Shutdown();
+        capture.Shutdown();
         return Fail(L"the test target stopped reporting samples");
     }
     if (excludedAfterShow * 4 > sampledAfterShow) {
-        injector.Shutdown();
+        capture.Shutdown();
         return Fail(L"the window is still excluded after show (excluded=" +
                     std::to_wstring(excludedAfterShow) + L", samples=" +
                     std::to_wstring(sampledAfterShow) + L")");
     }
 
-    if (sessions.Send(0, Cmd::Uninstall, error) != SendOutcome::Ok) {
-        injector.Shutdown();
+    if (capture.Send(0, Cmd::Uninstall, error) != SendOutcome::Ok) {
+        capture.Shutdown();
         return Fail(L"uninstall:", error);
     }
 
-    if (sessions.At(0).ipc.state()->status != static_cast<LONG>(Status::Detached)) {
-        injector.Shutdown();
+    if (capture.At(0).ipc.state()->status != static_cast<LONG>(Status::Detached)) {
+        capture.Shutdown();
         return Fail(L"the agent did not detach");
     }
 
-    sessions.RestoreAll();
-    injector.Shutdown();
+    capture.RestoreAll();
+    capture.Shutdown();
     Say(L"PASS");
     return 0;
 }

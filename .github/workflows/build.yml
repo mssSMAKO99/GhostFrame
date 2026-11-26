@@ -62,6 +62,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "agent harness failed with $LASTEXITCODE" }
           .\build\out\x64\Release\GfSettingsHost.exe
           if ($LASTEXITCODE -ne 0) { throw "settings harness failed with $LASTEXITCODE" }
+          .\build\out\x64\Release\GfBrandHost.exe
+          if ($LASTEXITCODE -ne 0) { throw "brand harness failed with $LASTEXITCODE" }
 
       # Full end-to-end injection test.  Cross-process hooks are blocked on some
       # hardened CI images, so a non-zero exit is reported as a warning with the
@@ -120,6 +122,8 @@ jobs:
           files: |
             dist/GhostFrame.exe
             dist/GhostFrame.exe.sha256
+            dist/GfBrand.exe
+            dist/GfBrand.exe.sha256
             dist/GhostFrame-*.zip
             install.ps1
           generate_release_notes: true

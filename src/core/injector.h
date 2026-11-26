@@ -19,6 +19,7 @@ struct ProcessInfo {
     ULONGLONG createTime = 0;
     Arch arch = Arch::Other;
     DWORD integrity = 0;
+    std::wstring exePath;  // full image path, when it can be read
 };
 
 bool DescribeProcess(DWORD pid, ProcessInfo& info, std::wstring& error);

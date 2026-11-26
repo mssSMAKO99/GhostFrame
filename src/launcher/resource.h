@@ -1,12 +1,9 @@
 #pragma once
 
+#include "ghostframe/payload_ids.h"
+
 // Application icon
 #define IDI_APP 101
-
-// Embedded payloads
-#define IDR_AGENT_X64 201
-#define IDR_AGENT_X86 202
-#define IDR_HELPER_X86 203
 
 // Commands (shared by the child buttons and the global hotkeys)
 #define ID_BTN_TOGGLE 1001
@@ -20,21 +17,14 @@
 #define ID_BTN_ATTACH 1010
 #define ID_EDIT_SEARCH 1011
 
-// Tray menu
-#define ID_TRAY_SHOW 1101
-#define ID_TRAY_RESTORE_ALL 1102
-#define ID_TRAY_EXIT 1103
-#define ID_TRAY_LOG 1104
-
-// Per-target tray entries: base + index * 3 + {toggle, restore, close}.
-#define ID_TRAY_TARGET_BASE 1300
-#define ID_TRAY_TARGET_STRIDE 3
-#define ID_TRAY_TARGET_TOGGLE 0
-#define ID_TRAY_TARGET_RESTORE 1
-#define ID_TRAY_TARGET_CLOSE 2
-
 // WINDOWS-tab context menu
 #define ID_MENU_ATTACH_PROCESS 1201
+
+// TARGETS-tab context menu
+#define ID_MENU_TGT_PRIMARY 1210
+#define ID_MENU_TGT_STICKY 1211
+#define ID_MENU_TGT_TOGGLE 1212
+#define ID_MENU_TGT_REMOVE 1213
 
 // TARGETS-row action buttons (right edge of a row).
 #define ID_ROW_STEALTH 1401
@@ -52,6 +42,30 @@
 #define ID_BTN_SET_HIDE_ATTACH 1027
 #define ID_BTN_SET_TRAY 1028
 #define ID_BTN_SET_SELF 1029
+#define ID_BTN_SET_AUTOSTART 1030
+#define ID_BTN_SET_FOREGROUND 1031
+#define ID_BTN_SET_DELETE_NOW 1041
+
+// APPEARANCE section
+#define ID_BTN_APPEAR_RESET 1032
+#define ID_BTN_APPEAR_IMAGE 1033
+#define ID_BTN_APPEAR_CLEAR 1034
+#define ID_BTN_TAB_UP 1035
+#define ID_BTN_TAB_DOWN 1036
+#define ID_BTN_TAB_VISIBLE 1037
+#define ID_BTN_ICON_APPLY 1038
+#define ID_BTN_ICON_CLEAR 1039
+#define ID_EDIT_APPEAR_EMOJI 1040
+
+// SHORTCUTS tab
+#define ID_EDIT_SC_NAME 1100
+#define ID_EDIT_SC_DESC 1101
+#define ID_EDIT_SC_APP 1102
+#define ID_EDIT_SC_ARGS 1103
+#define ID_BTN_SC_BROWSE 1104
+#define ID_BTN_SC_CREATE 1105
+#define ID_BTN_SC_REMOVE 1106
+#define ID_BTN_SC_REMOVE_ALL 1107
 
 // Timers
 #define ID_TIMER_REFRESH 1

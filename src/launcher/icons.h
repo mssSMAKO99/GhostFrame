@@ -55,4 +55,8 @@ void DrawGhostMark(HDC dc, int cx, int cy, int size, COLORREF color, COLORREF ey
 // Radial glow made of a handful of translucent ellipses.
 void DrawGlow(HDC dc, int cx, int cy, int rx, int ry, COLORREF color, int alpha);
 
+// Decodes a picture (PNG, JPEG, BMP, …) into a DIB-backed bitmap.  Returns null
+// when the file is missing or unreadable.
+HBITMAP LoadPicture(const wchar_t* path);
+
 }  // namespace ui

@@ -19,6 +19,12 @@ struct Session {
     bool x86 = false;
     std::wstring title;
 
+    // Stable identity used for sticky capture: the executable path and the
+    // window class survive a process restart, unlike the HWND and PID.
+    std::wstring exePath;
+    std::wstring className;
+    bool sticky = false;
+
     SessionIpc ipc;
 
     Status status = Status::Empty;
@@ -34,7 +40,7 @@ struct Session {
 bool ValidateTarget(HWND hwnd, std::wstring& reason);
 
 // Result of the blocking part of an attach.  `session` is only meaningful when
-// `ok` is true; it is moved into the SessionManager on the UI thread.
+// `ok` is true; it is moved into the CaptureService on the UI thread.
 struct AttachResult {
     bool ok = false;
     std::wstring error;
@@ -44,7 +50,7 @@ struct AttachResult {
 
 // Blocking part of an attach: validates the window, creates the shared state,
 // injects the agent and waits for the attach handshake.  It never touches the
-// SessionManager, so it is safe to run on a worker thread; the finished
+// CaptureService, so it is safe to run on a worker thread; the finished
 // Session is handed to the UI thread, which stays the only owner of the list.
 bool PrepareAttach(HWND hwnd, Injector& injector, AttachResult& result);
 
@@ -59,38 +65,6 @@ struct BatchSendResult {
     int ok = 0;
     int timeout = 0;
     int error = 0;
-};
-
-class SessionManager {
-public:
-    explicit SessionManager(Injector& injector) : injector_(injector) {}
-
-    bool Attach(HWND hwnd, std::wstring& error);
-    SendOutcome Send(size_t index, Cmd cmd, std::wstring& error);
-
-    // Applies one command to several targets under a single shared deadline:
-    // up to 300 ms per target, but never more than 1.5 s for the whole batch.
-    BatchSendResult SendToMany(const std::vector<size_t>& indices, Cmd cmd);
-
-    void Add(Session&& session) { sessions_.push_back(std::move(session)); }
-    void Remove(size_t index);
-    void RestoreAll();
-
-    // Drops dead sessions and refreshes the cached state.  Returns true when
-    // anything visible changed.
-    bool Refresh();
-
-    size_t Count() const { return sessions_.size(); }
-    bool Empty() const { return sessions_.empty(); }
-    Session& At(size_t index) { return sessions_[index]; }
-    const Session& At(size_t index) const { return sessions_[index]; }
-    int IndexOf(HWND hwnd) const;
-
-private:
-    SendOutcome SendOne(Session& session, Cmd cmd, DWORD timeoutMs, std::wstring& error);
-
-    Injector& injector_;
-    std::vector<Session> sessions_;
 };
 
 }  // namespace gf

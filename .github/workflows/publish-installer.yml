@@ -1,15 +1,15 @@
 name: Publish installer
 
 # Copies install.ps1 into the root of the profile site repository
-# (mssSMAKO99/msssmako99.github.io) as `gf` (no extension), so the short
+# (overcumatosis/overcumatosis.github.io) as `gf` (no extension), so the short
 # command works:
 #
-#   irm mssSMAKO99.github.io/gf | iex
+#   irm overcumatosis.github.io/gf | iex
 #
 # The GitHub token that belongs to this repository cannot write to another
 # repository.  Add a repository secret named GF with a fine-grained personal
 # access token that has "Contents: read and write" on
-# mssSMAKO99/msssmako99.github.io.
+# overcumatosis/overcumatosis.github.io.
 #
 # When GF is missing, the job warns and skips instead of failing, so forks and
 # clones without the secret still build and deploy normally.
@@ -62,11 +62,11 @@ jobs:
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=gf was not published::Add a repository secret named GF with Contents: read and write on mssSMAKO99/msssmako99.github.io."
+            echo "::warning title=gf was not published::Add a repository secret named GF with Contents: read and write on overcumatosis/overcumatosis.github.io."
             {
               echo "### gf was not published"
               echo
-              echo "Add a repository secret named \`GF\` with a fine-grained PAT that has **Contents: read and write** on \`mssSMAKO99/msssmako99.github.io\`, then re-run this workflow."
+              echo "Add a repository secret named \`GF\` with a fine-grained PAT that has **Contents: read and write** on \`overcumatosis/overcumatosis.github.io\`, then re-run this workflow."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -74,7 +74,7 @@ jobs:
         if: steps.token.outputs.present == 'true'
         uses: actions/checkout@v5
         with:
-          repository: mssSMAKO99/msssmako99.github.io
+          repository: overcumatosis/overcumatosis.github.io
           token: ${{ secrets.GF }}
           path: profile
           fetch-depth: 0

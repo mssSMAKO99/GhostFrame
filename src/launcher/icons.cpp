@@ -82,6 +82,55 @@ void ShutdownIcons() {
     }
 }
 
+HBITMAP LoadPicture(const wchar_t* path) {
+    if (g_token == 0 || path == nullptr || path[0] == L'\0') {
+        return nullptr;
+    }
+
+    Bitmap image(path);
+    if (image.GetLastStatus() != Ok) {
+        return nullptr;
+    }
+    const int width = static_cast<int>(image.GetWidth());
+    const int height = static_cast<int>(image.GetHeight());
+    if (width <= 0 || height <= 0) {
+        return nullptr;
+    }
+
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;  // top-down, matching the picture
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HBITMAP bitmap = ::CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bitmap == nullptr || bits == nullptr) {
+        if (bitmap != nullptr) {
+            ::DeleteObject(bitmap);
+        }
+        return nullptr;
+    }
+
+    HDC dc = ::CreateCompatibleDC(nullptr);
+    if (dc == nullptr) {
+        ::DeleteObject(bitmap);
+        return nullptr;
+    }
+    HGDIOBJ old = ::SelectObject(dc, bitmap);
+    {
+        Graphics graphics(dc);
+        graphics.SetCompositingMode(CompositingModeSourceCopy);
+        graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+        graphics.DrawImage(&image, 0, 0, width, height);
+    }
+    ::SelectObject(dc, old);
+    ::DeleteDC(dc);
+    return bitmap;
+}
+
 void DrawGlow(HDC dc, int cx, int cy, int rx, int ry, COLORREF color, int alpha) {
     if (g_token == 0 || rx <= 0 || ry <= 0 || alpha <= 0) {
         return;

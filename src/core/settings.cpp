@@ -4,7 +4,10 @@
 #include <string.h>
 #include <wchar.h>
 
+#include <cstdint>
 #include <utility>
+
+#include "json.h"
 
 namespace gf {
 
@@ -51,354 +54,10 @@ bool SameModifiers(UINT left, UINT right) {
     return (left & kMask) == (right & kMask);
 }
 
-// ---------------------------------------------------------------------------
-// Minimal JSON reader
-// ---------------------------------------------------------------------------
-
-struct JsonValue {
-    enum class Type { Null, Bool, Number, String, Array, Object };
-
-    Type type = Type::Null;
-    bool boolean = false;
-    double number = 0;
-    std::wstring text;
-    std::vector<JsonValue> array;
-    std::vector<std::pair<std::wstring, JsonValue>> object;
-
-    const JsonValue* Get(const wchar_t* key) const {
-        if (type != Type::Object) {
-            return nullptr;
-        }
-        for (const auto& entry : object) {
-            if (entry.first == key) {
-                return &entry.second;
-            }
-        }
-        return nullptr;
-    }
-};
-
-class JsonParser {
-public:
-    explicit JsonParser(const std::wstring& text) : text_(text) {}
-
-    bool Parse(JsonValue& out) {
-        SkipSpace();
-        if (!ParseValue(out)) {
-            return false;
-        }
-        SkipSpace();
-        if (pos_ != text_.size()) {
-            return Fail(L"trailing characters");
-        }
-        return true;
-    }
-
-    const std::wstring& error() const { return error_; }
-
-private:
-    bool Fail(const wchar_t* message) {
-        if (error_.empty()) {
-            error_ = message;
-        }
-        return false;
-    }
-
-    bool Eof() const { return pos_ >= text_.size(); }
-    wchar_t Peek() const { return Eof() ? L'\0' : text_[pos_]; }
-    wchar_t Next() { return Eof() ? L'\0' : text_[pos_++]; }
-
-    void SkipSpace() {
-        while (!Eof()) {
-            const wchar_t ch = text_[pos_];
-            if (ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n') {
-                ++pos_;
-            } else {
-                break;
-            }
-        }
-    }
-
-    bool Literal(const wchar_t* word) {
-        const size_t length = wcslen(word);
-        if (text_.compare(pos_, length, word) != 0) {
-            return false;
-        }
-        pos_ += length;
-        return true;
-    }
-
-    bool ParseValue(JsonValue& out) {
-        SkipSpace();
-        if (Eof()) {
-            return Fail(L"unexpected end of input");
-        }
-        switch (Peek()) {
-            case L'{':
-                return ParseObject(out);
-            case L'[':
-                return ParseArray(out);
-            case L'"': {
-                out.type = JsonValue::Type::String;
-                return ParseString(out.text);
-            }
-            case L't':
-                if (Literal(L"true")) {
-                    out.type = JsonValue::Type::Bool;
-                    out.boolean = true;
-                    return true;
-                }
-                return Fail(L"invalid literal");
-            case L'f':
-                if (Literal(L"false")) {
-                    out.type = JsonValue::Type::Bool;
-                    out.boolean = false;
-                    return true;
-                }
-                return Fail(L"invalid literal");
-            case L'n':
-                if (Literal(L"null")) {
-                    out.type = JsonValue::Type::Null;
-                    return true;
-                }
-                return Fail(L"invalid literal");
-            default:
-                return ParseNumber(out);
-        }
-    }
-
-    bool ParseObject(JsonValue& out) {
-        out.type = JsonValue::Type::Object;
-        ++pos_;  // '{'
-        SkipSpace();
-        if (Peek() == L'}') {
-            ++pos_;
-            return true;
-        }
-        for (;;) {
-            SkipSpace();
-            if (Peek() != L'"') {
-                return Fail(L"expected a key");
-            }
-            std::wstring key;
-            if (!ParseString(key)) {
-                return false;
-            }
-            SkipSpace();
-            if (Next() != L':') {
-                return Fail(L"expected ':'");
-            }
-            JsonValue value;
-            if (!ParseValue(value)) {
-                return false;
-            }
-            out.object.emplace_back(std::move(key), std::move(value));
-            SkipSpace();
-            const wchar_t separator = Next();
-            if (separator == L',') {
-                continue;
-            }
-            if (separator == L'}') {
-                return true;
-            }
-            return Fail(L"expected ',' or '}'");
-        }
-    }
-
-    bool ParseArray(JsonValue& out) {
-        out.type = JsonValue::Type::Array;
-        ++pos_;  // '['
-        SkipSpace();
-        if (Peek() == L']') {
-            ++pos_;
-            return true;
-        }
-        for (;;) {
-            JsonValue value;
-            if (!ParseValue(value)) {
-                return false;
-            }
-            out.array.push_back(std::move(value));
-            SkipSpace();
-            const wchar_t separator = Next();
-            if (separator == L',') {
-                continue;
-            }
-            if (separator == L']') {
-                return true;
-            }
-            return Fail(L"expected ',' or ']'");
-        }
-    }
-
-    bool ParseString(std::wstring& out) {
-        out.clear();
-        ++pos_;  // '"'
-        while (!Eof()) {
-            wchar_t ch = Next();
-            if (ch == L'"') {
-                return true;
-            }
-            if (ch != L'\\') {
-                out.push_back(ch);
-                continue;
-            }
-            if (Eof()) {
-                return Fail(L"unterminated escape");
-            }
-            const wchar_t escape = Next();
-            switch (escape) {
-                case L'"':
-                    out.push_back(L'"');
-                    break;
-                case L'\\':
-                    out.push_back(L'\\');
-                    break;
-                case L'/':
-                    out.push_back(L'/');
-                    break;
-                case L'b':
-                    out.push_back(L'\b');
-                    break;
-                case L'f':
-                    out.push_back(L'\f');
-                    break;
-                case L'n':
-                    out.push_back(L'\n');
-                    break;
-                case L'r':
-                    out.push_back(L'\r');
-                    break;
-                case L't':
-                    out.push_back(L'\t');
-                    break;
-                case L'u': {
-                    unsigned code = 0;
-                    if (!ParseHex4(code)) {
-                        return Fail(L"invalid \\u escape");
-                    }
-                    // Combine a UTF-16 surrogate pair when present.
-                    if (code >= 0xD800 && code <= 0xDBFF && pos_ + 1 < text_.size() &&
-                        text_[pos_] == L'\\' && text_[pos_ + 1] == L'u') {
-                        pos_ += 2;
-                        unsigned low = 0;
-                        if (!ParseHex4(low)) {
-                            return Fail(L"invalid low surrogate");
-                        }
-                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
-                    }
-                    if (code <= 0xFFFF) {
-                        out.push_back(static_cast<wchar_t>(code));
-                    } else {
-                        code -= 0x10000;
-                        out.push_back(static_cast<wchar_t>(0xD800 + (code >> 10)));
-                        out.push_back(static_cast<wchar_t>(0xDC00 + (code & 0x3FF)));
-                    }
-                    break;
-                }
-                default:
-                    return Fail(L"invalid escape");
-            }
-        }
-        return Fail(L"unterminated string");
-    }
-
-    bool ParseHex4(unsigned& value) {
-        value = 0;
-        for (int i = 0; i < 4; ++i) {
-            if (Eof()) {
-                return false;
-            }
-            const wchar_t ch = Next();
-            unsigned digit = 0;
-            if (ch >= L'0' && ch <= L'9') {
-                digit = static_cast<unsigned>(ch - L'0');
-            } else if (ch >= L'a' && ch <= L'f') {
-                digit = static_cast<unsigned>(ch - L'a' + 10);
-            } else if (ch >= L'A' && ch <= L'F') {
-                digit = static_cast<unsigned>(ch - L'A' + 10);
-            } else {
-                return false;
-            }
-            value = (value << 4) | digit;
-        }
-        return true;
-    }
-
-    bool ParseNumber(JsonValue& out) {
-        const size_t start = pos_;
-        if (Peek() == L'-') {
-            ++pos_;
-        }
-        bool digits = false;
-        while (!Eof() && Peek() >= L'0' && Peek() <= L'9') {
-            ++pos_;
-            digits = true;
-        }
-        if (Peek() == L'.') {
-            ++pos_;
-            while (!Eof() && Peek() >= L'0' && Peek() <= L'9') {
-                ++pos_;
-                digits = true;
-            }
-        }
-        if (Peek() == L'e' || Peek() == L'E') {
-            ++pos_;
-            if (Peek() == L'+' || Peek() == L'-') {
-                ++pos_;
-            }
-            while (!Eof() && Peek() >= L'0' && Peek() <= L'9') {
-                ++pos_;
-            }
-        }
-        if (!digits) {
-            return Fail(L"expected a value");
-        }
-        out.type = JsonValue::Type::Number;
-        out.number = wcstod(text_.substr(start, pos_ - start).c_str(), nullptr);
-        return true;
-    }
-
-    const std::wstring& text_;
-    size_t pos_ = 0;
-    std::wstring error_;
-};
-
-// ---------------------------------------------------------------------------
-// JSON writer
-// ---------------------------------------------------------------------------
-
+// Kept as a local name so the settings writer reads naturally; the
+// implementation is shared with the shortcut manifest.
 void AppendEscaped(std::wstring& out, const std::wstring& text) {
-    out.push_back(L'"');
-    for (wchar_t ch : text) {
-        switch (ch) {
-            case L'"':
-                out += L"\\\"";
-                break;
-            case L'\\':
-                out += L"\\\\";
-                break;
-            case L'\n':
-                out += L"\\n";
-                break;
-            case L'\r':
-                out += L"\\r";
-                break;
-            case L'\t':
-                out += L"\\t";
-                break;
-            default:
-                if (ch < 0x20) {
-                    wchar_t buffer[8] = {};
-                    swprintf_s(buffer, L"\\u%04X", static_cast<unsigned>(ch));
-                    out += buffer;
-                } else {
-                    out.push_back(ch);
-                }
-                break;
-        }
-    }
-    out.push_back(L'"');
+    AppendJsonString(out, text);
 }
 
 void AppendBool(std::wstring& out, bool value) { out += value ? L"true" : L"false"; }
@@ -434,6 +93,105 @@ std::wstring ReadString(const JsonValue* value, const std::wstring& fallback) {
     return fallback;
 }
 
+// ---------------------------------------------------------------------------
+// Colour helpers.  The file stores #RRGGBB; COLORREF is 0x00BBGGRR.
+// ---------------------------------------------------------------------------
+
+std::wstring FormatColor(COLORREF color) {
+    wchar_t buffer[16] = {};
+    swprintf_s(buffer, L"#%02X%02X%02X", static_cast<unsigned>(GetRValue(color)),
+               static_cast<unsigned>(GetGValue(color)), static_cast<unsigned>(GetBValue(color)));
+    return buffer;
+}
+
+int HexDigit(wchar_t ch) {
+    if (ch >= L'0' && ch <= L'9') {
+        return ch - L'0';
+    }
+    if (ch >= L'a' && ch <= L'f') {
+        return ch - L'a' + 10;
+    }
+    if (ch >= L'A' && ch <= L'F') {
+        return ch - L'A' + 10;
+    }
+    return -1;
+}
+
+bool ParseColor(const std::wstring& text, COLORREF& out) {
+    if (text.size() != 7 || text[0] != L'#') {
+        return false;
+    }
+    int digits[6] = {};
+    for (int i = 0; i < 6; ++i) {
+        digits[i] = HexDigit(text[static_cast<size_t>(i) + 1]);
+        if (digits[i] < 0) {
+            return false;
+        }
+    }
+    const int red = digits[0] * 16 + digits[1];
+    const int green = digits[2] * 16 + digits[3];
+    const int blue = digits[4] * 16 + digits[5];
+    out = RGB(red, green, blue);
+    return true;
+}
+
+COLORREF ReadColor(const JsonValue* value, COLORREF fallback) {
+    if (value != nullptr && value->type == JsonValue::Type::String) {
+        COLORREF parsed = fallback;
+        if (ParseColor(value->text, parsed)) {
+            return parsed;
+        }
+    }
+    return fallback;
+}
+
+void ParseAppearance(const JsonValue& root, AppearanceSettings& appearance) {
+    const JsonValue* object = root.Get(L"appearance");
+    if (object == nullptr || object->type != JsonValue::Type::Object) {
+        return;
+    }
+    appearance.theme = ThemePresetFromKey(ReadString(object->Get(L"theme"), L"graphite"));
+    if (appearance.theme == ThemePreset::Count) {
+        appearance.theme = ThemePreset::Graphite;
+    }
+    appearance.customAccent = ReadBool(object->Get(L"customAccent"), appearance.customAccent);
+    appearance.accent = ReadColor(object->Get(L"accent"), appearance.accent);
+    appearance.customBackground =
+        ReadBool(object->Get(L"customBackground"), appearance.customBackground);
+    appearance.background =
+        BackgroundStyleFromKey(ReadString(object->Get(L"background"), L"solid"));
+    if (appearance.background == BackgroundStyle::Count) {
+        appearance.background = BackgroundStyle::Solid;
+    }
+    appearance.backgroundTop = ReadColor(object->Get(L"backgroundTop"), appearance.backgroundTop);
+    appearance.backgroundBottom =
+        ReadColor(object->Get(L"backgroundBottom"), appearance.backgroundBottom);
+    appearance.backgroundImage =
+        ReadString(object->Get(L"backgroundImage"), appearance.backgroundImage);
+    appearance.density = DensityFromKey(ReadString(object->Get(L"density"), L"comfortable"));
+    if (appearance.density == DensityMode::Count) {
+        appearance.density = DensityMode::Comfortable;
+    }
+    appearance.iconEmoji =
+        NormalizeEmoji(ReadString(object->Get(L"iconEmoji"), appearance.iconEmoji));
+
+    const JsonValue* tabs = object->Get(L"tabs");
+    if (tabs != nullptr && tabs->type == JsonValue::Type::Array) {
+        appearance.tabs.clear();
+        for (const JsonValue& item : tabs->array) {
+            if (item.type != JsonValue::Type::Object) {
+                continue;
+            }
+            TabPreference preference;
+            preference.id = ReadString(item.Get(L"id"), L"");
+            preference.visible = ReadBool(item.Get(L"visible"), true);
+            if (!preference.id.empty()) {
+                appearance.tabs.push_back(std::move(preference));
+            }
+        }
+    }
+}
+
 void ParseUi(const JsonValue& root, UiSettings& ui) {
     const JsonValue* object = root.Get(L"ui");
     if (object == nullptr || object->type != JsonValue::Type::Object) {
@@ -447,6 +205,14 @@ void ParseUi(const JsonValue& root, UiSettings& ui) {
     ui.noSelfExclude = ReadBool(object->Get(L"noSelfExclude"), ui.noSelfExclude);
     ui.hideOnAttach = ReadBool(object->Get(L"hideOnAttach"), ui.hideOnAttach);
     ui.lastTab = ReadString(object->Get(L"lastTab"), ui.lastTab);
+    ui.selfDelete = SelfDeleteModeFromKey(ReadString(object->Get(L"selfDelete"), L"never"));
+    if (ui.selfDelete == SelfDeleteMode::Count) {
+        ui.selfDelete = SelfDeleteMode::Never;
+    }
+    ui.deleteOnExit = ReadBool(object->Get(L"deleteOnExit"), ui.deleteOnExit);
+    if (ui.selfDelete == SelfDeleteMode::Never) {
+        ui.deleteOnExit = false;
+    }
 }
 
 void ParseHotkeys(const JsonValue& root, Settings& out) {
@@ -467,6 +233,26 @@ void ParseHotkeys(const JsonValue& root, Settings& out) {
         if (ParseHotkey(entry.second.text, modifiers, virtualKey)) {
             out.hotkeys[static_cast<int>(action)] = HotkeyBinding{modifiers, virtualKey};
         }
+    }
+}
+
+void ParseSticky(const JsonValue& root, Settings& out) {
+    const JsonValue* array = root.Get(L"sticky");
+    if (array == nullptr || array->type != JsonValue::Type::Array) {
+        return;
+    }
+    out.sticky.clear();
+    for (const JsonValue& item : array->array) {
+        if (item.type != JsonValue::Type::Object) {
+            continue;
+        }
+        StickyTarget target;
+        target.exePath = ReadString(item.Get(L"exe"), target.exePath);
+        target.className = ReadString(item.Get(L"class"), target.className);
+        if (target.exePath.empty()) {
+            continue;  // an identity without an executable can never match
+        }
+        out.sticky.push_back(std::move(target));
     }
 }
 
@@ -541,6 +327,9 @@ std::wstring SerializeSettings(const Settings& settings) {
     out += L"  \"version\": ";
     AppendInt(out, settings.version);
     out += L",\n";
+    out += L"  \"foregroundTracking\": ";
+    AppendBool(out, settings.foregroundTracking);
+    out += L",\n";
 
     out += L"  \"ui\": {\n";
     out += L"    \"x\": ";
@@ -561,7 +350,55 @@ std::wstring SerializeSettings(const Settings& settings) {
     out += L",\n";
     out += L"    \"lastTab\": ";
     AppendEscaped(out, settings.ui.lastTab);
+    out += L",\n";
+    out += L"    \"selfDelete\": ";
+    AppendEscaped(out, SelfDeleteModeKey(settings.ui.selfDelete));
+    out += L", \"deleteOnExit\": ";
+    AppendBool(out, settings.ui.deleteOnExit);
     out += L"\n  },\n";
+
+    out += L"  \"appearance\": {\n";
+    out += L"    \"theme\": ";
+    AppendEscaped(out, ThemePresetKey(settings.appearance.theme));
+    out += L", \"customAccent\": ";
+    AppendBool(out, settings.appearance.customAccent);
+    out += L", \"accent\": ";
+    AppendEscaped(out, FormatColor(settings.appearance.accent));
+    out += L",\n";
+    out += L"    \"customBackground\": ";
+    AppendBool(out, settings.appearance.customBackground);
+    out += L", \"background\": ";
+    AppendEscaped(out, BackgroundStyleKey(settings.appearance.background));
+    out += L", \"backgroundTop\": ";
+    AppendEscaped(out, FormatColor(settings.appearance.backgroundTop));
+    out += L",\n";
+    out += L"    \"backgroundBottom\": ";
+    AppendEscaped(out, FormatColor(settings.appearance.backgroundBottom));
+    out += L", \"backgroundImage\": ";
+    AppendEscaped(out, settings.appearance.backgroundImage);
+    out += L",\n";
+    out += L"    \"density\": ";
+    AppendEscaped(out, DensityKey(settings.appearance.density));
+    out += L", \"iconEmoji\": ";
+    AppendEscaped(out, settings.appearance.iconEmoji);
+    out += L",\n";
+    out += L"    \"tabs\": [";
+    if (settings.appearance.tabs.empty()) {
+        out += L"]\n";
+    } else {
+        out += L"\n";
+        for (size_t i = 0; i < settings.appearance.tabs.size(); ++i) {
+            const TabPreference& tab = settings.appearance.tabs[i];
+            out += L"      { \"id\": ";
+            AppendEscaped(out, tab.id);
+            out += L", \"visible\": ";
+            AppendBool(out, tab.visible);
+            out += L" }";
+            out += (i + 1 < settings.appearance.tabs.size()) ? L",\n" : L"\n";
+        }
+        out += L"    ]\n";
+    }
+    out += L"  },\n";
 
     out += L"  \"hotkeys\": {\n";
     for (int i = 0; i < kHotkeyCount; ++i) {
@@ -576,7 +413,7 @@ std::wstring SerializeSettings(const Settings& settings) {
 
     out += L"  \"autoAttach\": [";
     if (settings.autoAttach.empty()) {
-        out += L"]\n";
+        out += L"],\n";
     } else {
         out += L"\n";
         for (size_t i = 0; i < settings.autoAttach.size(); ++i) {
@@ -592,6 +429,23 @@ std::wstring SerializeSettings(const Settings& settings) {
             out += L" }";
             out += (i + 1 < settings.autoAttach.size()) ? L",\n" : L"\n";
         }
+        out += L"  ],\n";
+    }
+
+    out += L"  \"sticky\": [";
+    if (settings.sticky.empty()) {
+        out += L"]\n";
+    } else {
+        out += L"\n";
+        for (size_t i = 0; i < settings.sticky.size(); ++i) {
+            const StickyTarget& target = settings.sticky[i];
+            out += L"    { \"exe\": ";
+            AppendEscaped(out, target.exePath);
+            out += L", \"class\": ";
+            AppendEscaped(out, target.className);
+            out += L" }";
+            out += (i + 1 < settings.sticky.size()) ? L",\n" : L"\n";
+        }
         out += L"  ]\n";
     }
 
@@ -600,10 +454,8 @@ std::wstring SerializeSettings(const Settings& settings) {
 }
 
 bool ParseSettings(const std::wstring& json, Settings& out, std::wstring& error) {
-    JsonParser parser(json);
     JsonValue root;
-    if (!parser.Parse(root)) {
-        error = parser.error();
+    if (!ParseJson(json, root, error)) {
         return false;
     }
     if (root.type != JsonValue::Type::Object) {
@@ -613,9 +465,13 @@ bool ParseSettings(const std::wstring& json, Settings& out, std::wstring& error)
 
     Settings parsed = DefaultSettings();
     parsed.version = ReadInt(root.Get(L"version"), parsed.version);
+    parsed.foregroundTracking =
+        ReadBool(root.Get(L"foregroundTracking"), parsed.foregroundTracking);
     ParseUi(root, parsed.ui);
+    ParseAppearance(root, parsed.appearance);
     ParseHotkeys(root, parsed);
     ParseAutoAttach(root, parsed);
+    ParseSticky(root, parsed);
     parsed.badFile = false;
 
     out = std::move(parsed);
@@ -885,19 +741,26 @@ bool SameHotkey(const HotkeyBinding& left, const HotkeyBinding& right) {
 bool ValidateHotkeys(const Settings& settings, std::wstring& error) {
     for (int i = 0; i < kHotkeyCount; ++i) {
         const HotkeyBinding& binding = settings.hotkeys[i];
+        const HotkeyAction action = static_cast<HotkeyAction>(i);
         if (binding.empty()) {
-            error = std::wstring(HotkeyActionLabel(static_cast<HotkeyAction>(i))) +
-                    L" has no key combination";
+            // Self-destruct has no default binding; leaving it empty is valid.
+            if (action == HotkeyAction::SelfDestruct) {
+                continue;
+            }
+            error = std::wstring(HotkeyActionLabel(action)) + L" has no key combination";
             return false;
         }
         if ((binding.modifiers & (MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN)) == 0) {
-            error = std::wstring(HotkeyActionLabel(static_cast<HotkeyAction>(i))) +
+            error = std::wstring(HotkeyActionLabel(action)) +
                     L" needs at least one modifier (Ctrl, Alt, Shift or Win)";
             return false;
         }
         for (int j = i + 1; j < kHotkeyCount; ++j) {
+            if (settings.hotkeys[j].empty()) {
+                continue;
+            }
             if (SameHotkey(binding, settings.hotkeys[j])) {
-                error = std::wstring(HotkeyActionLabel(static_cast<HotkeyAction>(i))) + L" and " +
+                error = std::wstring(HotkeyActionLabel(action)) + L" and " +
                         HotkeyActionLabel(static_cast<HotkeyAction>(j)) +
                         L" share the same combination";
                 return false;
@@ -923,6 +786,19 @@ bool RuleMatches(const AutoAttachRule& rule, const std::wstring& exeName,
         return ContainsNoCase(title, rule.value);
     }
     return false;
+}
+
+bool StickyMatches(const StickyTarget& target, const std::wstring& exePath,
+                   const std::wstring& className) {
+    if (target.exePath.empty() || exePath.empty()) {
+        return false;
+    }
+    if (_wcsicmp(target.exePath.c_str(), exePath.c_str()) != 0) {
+        return false;
+    }
+    // An empty stored class acts as a wildcard, so an application can opt into
+    // "any window of this executable".
+    return target.className.empty() || _wcsicmp(target.className.c_str(), className.c_str()) == 0;
 }
 
 AutoCaptureGuard::Entry* AutoCaptureGuard::Find(DWORD pid, ULONGLONG createTime, HWND hwnd) {
@@ -967,6 +843,252 @@ void AutoCaptureGuard::Suppress(DWORD pid, ULONGLONG createTime, HWND hwnd) {
 void AutoCaptureGuard::Clear() { entries_.clear(); }
 
 // ---------------------------------------------------------------------------
+// Appearance metadata
+// ---------------------------------------------------------------------------
+
+const wchar_t* ThemePresetKey(ThemePreset preset) {
+    switch (preset) {
+        case ThemePreset::Graphite:
+            return L"graphite";
+        case ThemePreset::Light:
+            return L"light";
+        case ThemePreset::Midnight:
+            return L"midnight";
+        case ThemePreset::System:
+            return L"system";
+        default:
+            return L"graphite";
+    }
+}
+
+const wchar_t* ThemePresetLabel(ThemePreset preset) {
+    switch (preset) {
+        case ThemePreset::Graphite:
+            return L"Graphite";
+        case ThemePreset::Light:
+            return L"Light";
+        case ThemePreset::Midnight:
+            return L"Midnight";
+        case ThemePreset::System:
+            return L"System";
+        default:
+            return L"Graphite";
+    }
+}
+
+ThemePreset ThemePresetFromKey(const std::wstring& key) {
+    for (int i = 0; i < static_cast<int>(ThemePreset::Count); ++i) {
+        const auto preset = static_cast<ThemePreset>(i);
+        if (_wcsicmp(key.c_str(), ThemePresetKey(preset)) == 0) {
+            return preset;
+        }
+    }
+    return ThemePreset::Count;
+}
+
+const wchar_t* DensityKey(DensityMode density) {
+    return density == DensityMode::Compact ? L"compact" : L"comfortable";
+}
+
+const wchar_t* DensityLabel(DensityMode density) {
+    return density == DensityMode::Compact ? L"Compact" : L"Comfortable";
+}
+
+DensityMode DensityFromKey(const std::wstring& key) {
+    if (_wcsicmp(key.c_str(), L"compact") == 0) {
+        return DensityMode::Compact;
+    }
+    if (_wcsicmp(key.c_str(), L"comfortable") == 0) {
+        return DensityMode::Comfortable;
+    }
+    return DensityMode::Count;
+}
+
+const wchar_t* BackgroundStyleKey(BackgroundStyle style) {
+    return style == BackgroundStyle::Gradient ? L"gradient" : L"solid";
+}
+
+BackgroundStyle BackgroundStyleFromKey(const std::wstring& key) {
+    if (_wcsicmp(key.c_str(), L"gradient") == 0) {
+        return BackgroundStyle::Gradient;
+    }
+    if (_wcsicmp(key.c_str(), L"solid") == 0) {
+        return BackgroundStyle::Solid;
+    }
+    return BackgroundStyle::Count;
+}
+
+const wchar_t* SelfDeleteModeKey(SelfDeleteMode mode) {
+    switch (mode) {
+        case SelfDeleteMode::ExeOnly:
+            return L"exe";
+        case SelfDeleteMode::Everything:
+            return L"everything";
+        default:
+            return L"never";
+    }
+}
+
+const wchar_t* SelfDeleteModeLabel(SelfDeleteMode mode) {
+    switch (mode) {
+        case SelfDeleteMode::ExeOnly:
+            return L"Exe only";
+        case SelfDeleteMode::Everything:
+            return L"Everything";
+        default:
+            return L"Never";
+    }
+}
+
+SelfDeleteMode SelfDeleteModeFromKey(const std::wstring& key) {
+    if (_wcsicmp(key.c_str(), L"exe") == 0 || _wcsicmp(key.c_str(), L"exeonly") == 0) {
+        return SelfDeleteMode::ExeOnly;
+    }
+    if (_wcsicmp(key.c_str(), L"everything") == 0 || _wcsicmp(key.c_str(), L"all") == 0) {
+        return SelfDeleteMode::Everything;
+    }
+    if (_wcsicmp(key.c_str(), L"never") == 0) {
+        return SelfDeleteMode::Never;
+    }
+    return SelfDeleteMode::Count;
+}
+
+namespace {
+
+bool IsEmojiWhitespace(uint32_t cp) {
+    return cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D || cp == 0xA0 ||
+           cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200A) || cp == 0x2028 || cp == 0x2029 ||
+           cp == 0x202F || cp == 0x205F || cp == 0x3000 || cp == 0xFEFF;
+}
+
+// Characters that extend the previous glyph: variation selectors, combining
+// marks, skin-tone modifiers, the keycap mark and emoji tag characters.
+bool IsEmojiExtend(uint32_t cp) {
+    return cp == 0xFE0E || cp == 0xFE0F || (cp >= 0x0300 && cp <= 0x036F) ||
+           (cp >= 0x1AB0 && cp <= 0x1AFF) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+           (cp >= 0x1F3FB && cp <= 0x1F3FF) || cp == 0x20E3 ||
+           (cp >= 0xE0020 && cp <= 0xE007F);
+}
+
+bool IsRegionalIndicator(uint32_t cp) { return cp >= 0x1F1E6 && cp <= 0x1F1FF; }
+
+std::vector<uint32_t> ToCodePoints(const std::wstring& text) {
+    std::vector<uint32_t> out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        const wchar_t ch = text[i];
+        if (ch >= 0xD800 && ch <= 0xDBFF && i + 1 < text.size()) {
+            const wchar_t low = text[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                out.push_back(0x10000 + ((static_cast<uint32_t>(ch) - 0xD800) << 10) +
+                              (static_cast<uint32_t>(low) - 0xDC00));
+                ++i;
+                continue;
+            }
+        }
+        out.push_back(static_cast<uint32_t>(ch));
+    }
+    return out;
+}
+
+void AppendCodePoint(std::wstring& out, uint32_t cp) {
+    if (cp <= 0xFFFF) {
+        out.push_back(static_cast<wchar_t>(cp));
+        return;
+    }
+    cp -= 0x10000;
+    out.push_back(static_cast<wchar_t>(0xD800 + (cp >> 10)));
+    out.push_back(static_cast<wchar_t>(0xDC00 + (cp & 0x3FF)));
+}
+
+}  // namespace
+
+std::wstring NormalizeEmoji(const std::wstring& text) {
+    std::vector<uint32_t> codePoints = ToCodePoints(text);
+    size_t begin = 0;
+    while (begin < codePoints.size() && IsEmojiWhitespace(codePoints[begin])) {
+        ++begin;
+    }
+    // Some paste paths prefix the sequence with a variation selector.
+    while (begin < codePoints.size() && codePoints[begin] == 0xFE0F) {
+        ++begin;
+    }
+    if (begin >= codePoints.size()) {
+        return std::wstring();
+    }
+
+    std::wstring out;
+    AppendCodePoint(out, codePoints[begin]);
+    int regionalCount = IsRegionalIndicator(codePoints[begin]) ? 1 : 0;
+    size_t i = begin + 1;
+    while (i < codePoints.size()) {
+        const uint32_t cp = codePoints[i];
+        if (cp == 0x200D) {  // zero-width joiner: keep the next glyph
+            if (i + 1 >= codePoints.size()) {
+                break;
+            }
+            AppendCodePoint(out, cp);
+            AppendCodePoint(out, codePoints[i + 1]);
+            regionalCount = IsRegionalIndicator(codePoints[i + 1]) ? regionalCount + 1 : 0;
+            i += 2;
+            continue;
+        }
+        if (IsEmojiExtend(cp)) {
+            AppendCodePoint(out, cp);
+            ++i;
+            continue;
+        }
+        // A flag is exactly two regional indicators.
+        if (IsRegionalIndicator(cp) && regionalCount == 1) {
+            AppendCodePoint(out, cp);
+            regionalCount = 2;
+            ++i;
+            continue;
+        }
+        break;
+    }
+    return out;
+}
+
+void NormalizeTabs(AppearanceSettings& appearance, const std::vector<std::wstring>& knownIds) {
+    if (knownIds.empty()) {
+        appearance.tabs.clear();
+        return;
+    }
+
+    std::vector<TabPreference> result;
+    std::vector<bool> seen(knownIds.size(), false);
+    for (const TabPreference& tab : appearance.tabs) {
+        size_t index = knownIds.size();
+        for (size_t i = 0; i < knownIds.size(); ++i) {
+            if (tab.id == knownIds[i]) {
+                index = i;
+                break;
+            }
+        }
+        if (index == knownIds.size() || seen[index]) {
+            continue;
+        }
+        seen[index] = true;
+        result.push_back(tab);
+    }
+    for (size_t i = 0; i < knownIds.size(); ++i) {
+        if (!seen[i]) {
+            result.push_back(TabPreference{knownIds[i], true});
+        }
+    }
+
+    bool anyVisible = false;
+    for (const TabPreference& tab : result) {
+        anyVisible = anyVisible || tab.visible;
+    }
+    if (!anyVisible && !result.empty()) {
+        result.front().visible = true;
+    }
+    appearance.tabs = std::move(result);
+}
+
+// ---------------------------------------------------------------------------
 // Action metadata
 // ---------------------------------------------------------------------------
 
@@ -984,6 +1106,8 @@ const wchar_t* HotkeyActionKey(HotkeyAction action) {
             return L"restore";
         case HotkeyAction::Close:
             return L"close";
+        case HotkeyAction::SelfDestruct:
+            return L"selfDestruct";
         default:
             return L"";
     }
@@ -1003,6 +1127,8 @@ const wchar_t* HotkeyActionLabel(HotkeyAction action) {
             return L"Restore target";
         case HotkeyAction::Close:
             return L"Close target";
+        case HotkeyAction::SelfDestruct:
+            return L"Self-destruct";
         default:
             return L"";
     }

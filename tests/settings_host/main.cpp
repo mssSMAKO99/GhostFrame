@@ -8,12 +8,17 @@
 
 #include <stdio.h>
 
+#include <algorithm>
 #include <string.h>
 
 #include <string>
 #include <vector>
 
+#include "emoji_icon.h"
+#include "self_delete.h"
+#include "self_delete_plan.h"
 #include "settings.h"
+#include "shortcuts.h"
 
 namespace {
 
@@ -66,7 +71,30 @@ bool SameUi(const gf::UiSettings& left, const gf::UiSettings& right) {
     return left.x == right.x && left.y == right.y && left.width == right.width &&
            left.height == right.height && left.minimizeToTray == right.minimizeToTray &&
            left.noSelfExclude == right.noSelfExclude && left.hideOnAttach == right.hideOnAttach &&
-           left.lastTab == right.lastTab;
+           left.lastTab == right.lastTab && left.selfDelete == right.selfDelete &&
+           left.deleteOnExit == right.deleteOnExit;
+}
+
+bool SameTabs(const std::vector<gf::TabPreference>& left,
+              const std::vector<gf::TabPreference>& right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < left.size(); ++i) {
+        if (left[i].id != right[i].id || left[i].visible != right[i].visible) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool SameAppearance(const gf::AppearanceSettings& left, const gf::AppearanceSettings& right) {
+    return left.theme == right.theme && left.customAccent == right.customAccent &&
+           left.accent == right.accent && left.customBackground == right.customBackground &&
+           left.background == right.background && left.backgroundTop == right.backgroundTop &&
+           left.backgroundBottom == right.backgroundBottom &&
+           left.backgroundImage == right.backgroundImage && left.density == right.density &&
+           left.iconEmoji == right.iconEmoji && SameTabs(left.tabs, right.tabs);
 }
 
 void TestDefaults() {
@@ -83,6 +111,14 @@ void TestDefaults() {
           L"the default window size matches the design");
     Check(settings.ui.hideOnAttach, L"hide-on-attach is on by default");
     Check(settings.autoAttach.empty(), L"there are no default auto-capture rules");
+    Check(settings.appearance.theme == gf::ThemePreset::Graphite &&
+              settings.appearance.density == gf::DensityMode::Comfortable,
+          L"the default appearance is Graphite and comfortable");
+    Check(!settings.appearance.customAccent && !settings.appearance.customBackground,
+          L"the default appearance follows the theme palette");
+    Check(settings.appearance.iconEmoji.empty(), L"the bundled icon is the default");
+    Check(settings.ui.selfDelete == gf::SelfDeleteMode::Never && !settings.ui.deleteOnExit,
+          L"self-delete is off by default");
 
     const gf::HotkeyBinding toggle =
         settings.hotkeys[static_cast<int>(gf::HotkeyAction::ToggleSelection)];
@@ -103,10 +139,26 @@ void TestRoundTrip() {
     original.ui.noSelfExclude = true;
     original.ui.hideOnAttach = false;
     original.ui.lastTab = L"windows";
+    original.ui.selfDelete = gf::SelfDeleteMode::Everything;
+    original.ui.deleteOnExit = true;
     original.hotkeys[static_cast<int>(gf::HotkeyAction::Close)] =
         gf::HotkeyBinding{MOD_CONTROL | MOD_ALT, VK_F5};
     original.autoAttach.push_back(gf::AutoAttachRule{true, L"exe", L"notepad.exe", true});
     original.autoAttach.push_back(gf::AutoAttachRule{false, L"title", L"Chrome", false});
+    original.foregroundTracking = true;
+    original.sticky.push_back(gf::StickyTarget{L"C:\\Apps\\notepad.exe", L"Notepad"});
+    original.appearance.theme = gf::ThemePreset::Midnight;
+    original.appearance.customAccent = true;
+    original.appearance.accent = RGB(12, 200, 240);
+    original.appearance.customBackground = true;
+    original.appearance.background = gf::BackgroundStyle::Gradient;
+    original.appearance.backgroundTop = RGB(8, 15, 30);
+    original.appearance.backgroundBottom = RGB(14, 28, 54);
+    original.appearance.backgroundImage = L"C:\\Pictures\\missing\\wall.png";
+    original.appearance.density = gf::DensityMode::Compact;
+    original.appearance.iconEmoji = L"\xD83D\xDC68\x200D\xD83D\xDC69\x200D\xD83D\xDC67";
+    original.appearance.tabs.push_back(gf::TabPreference{L"windows", false});
+    original.appearance.tabs.push_back(gf::TabPreference{L"targets", true});
 
     const std::wstring json = gf::SerializeSettings(original);
 
@@ -123,6 +175,18 @@ void TestRoundTrip() {
               parsed.autoAttach[0].hide && parsed.autoAttach[1].match == L"title" &&
               !parsed.autoAttach[1].enabled && !parsed.autoAttach[1].hide,
           L"the auto-capture rule fields survive");
+    Check(parsed.foregroundTracking, L"foreground tracking survives the round-trip");
+    Check(parsed.sticky.size() == 1 && parsed.sticky[0].exePath == L"C:\\Apps\\notepad.exe" &&
+              parsed.sticky[0].className == L"Notepad",
+          L"a sticky identity survives the round-trip");
+    Check(gf::StickyMatches(parsed.sticky[0], L"c:\\apps\\NOTEPAD.exe", L"notepad"),
+          L"sticky matching is case-insensitive");
+    Check(!gf::StickyMatches(parsed.sticky[0], L"C:\\Apps\\other.exe", L"Notepad"),
+          L"a different executable does not match a sticky identity");
+    Check(SameAppearance(original.appearance, parsed.appearance),
+          L"every appearance field survives the round-trip");
+    Check(parsed.appearance.backgroundImage == L"C:\\Pictures\\missing\\wall.png",
+          L"a background path is preserved even when the file is absent");
 
     // Unknown keys are ignored rather than treated as an error.
     const std::wstring withExtra =
@@ -130,6 +194,142 @@ void TestRoundTrip() {
     gf::Settings extra;
     Check(gf::ParseSettings(withExtra, extra, error), L"unknown keys are ignored");
     Check(extra.ui.x == 5 && extra.ui.y == 100, L"known keys are still applied");
+
+    // An unknown or missing mode normalises to Never, and Never clears
+    // delete-on-exit so a hand-edited file cannot arm an accidental delete.
+    gf::Settings unknownMode;
+    Check(gf::ParseSettings(
+              L"{ \"ui\": { \"selfDelete\": \"sometimes\", \"deleteOnExit\": true } }",
+              unknownMode, error),
+          L"an unknown self-delete mode is parsed");
+    Check(unknownMode.ui.selfDelete == gf::SelfDeleteMode::Never && !unknownMode.ui.deleteOnExit,
+          L"an unknown self-delete mode falls back to Never");
+    Check(gf::SelfDeleteModeFromKey(L"exe") == gf::SelfDeleteMode::ExeOnly &&
+              gf::SelfDeleteModeFromKey(L"everything") == gf::SelfDeleteMode::Everything &&
+              gf::SelfDeleteModeFromKey(L"never") == gf::SelfDeleteMode::Never,
+          L"the self-delete mode keys map both ways");
+}
+
+void TestAppearanceTabs() {
+    gf::AppearanceSettings appearance;
+    appearance.tabs.push_back(gf::TabPreference{L"windows", false});
+    appearance.tabs.push_back(gf::TabPreference{L"unknown", true});
+    appearance.tabs.push_back(gf::TabPreference{L"targets", true});
+    appearance.tabs.push_back(gf::TabPreference{L"windows", true});
+
+    gf::NormalizeTabs(appearance, {L"targets", L"windows", L"settings"});
+    Check(appearance.tabs.size() == 3, L"normalising drops unknown and duplicate tabs");
+    Check(appearance.tabs.size() == 3 && appearance.tabs[0].id == L"windows" &&
+              !appearance.tabs[0].visible && appearance.tabs[1].id == L"targets" &&
+              appearance.tabs[2].id == L"settings" && appearance.tabs[2].visible,
+          L"normalising keeps the saved order and appends missing views visible");
+
+    gf::AppearanceSettings allHidden;
+    allHidden.tabs.push_back(gf::TabPreference{L"targets", false});
+    allHidden.tabs.push_back(gf::TabPreference{L"windows", false});
+    allHidden.tabs.push_back(gf::TabPreference{L"settings", false});
+    gf::NormalizeTabs(allHidden, {L"targets", L"windows", L"settings"});
+    Check(allHidden.tabs.size() == 3 && allHidden.tabs[0].visible,
+          L"normalising never hides every tab");
+
+    gf::AppearanceSettings empty;
+    gf::NormalizeTabs(empty, {L"targets", L"windows", L"settings"});
+    Check(empty.tabs.size() == 3 && empty.tabs[0].id == L"targets" && empty.tabs[0].visible,
+          L"an empty list becomes the whole registry");
+}
+
+void TestEmojiNormalization() {
+    const std::wstring cat = L"\xD83D\xDE3A";
+    const std::wstring family =
+        L"\xD83D\xDC68\x200D\xD83D\xDC69\x200D\xD83D\xDC67";
+    const std::wstring flag = L"\xD83C\xDDFA\xD83C\xDDF8";
+
+    Check(gf::NormalizeEmoji(L"   ").empty(), L"whitespace normalises to no emoji");
+    Check(gf::NormalizeEmoji(L"  " + cat + L" \t\r\n") == cat,
+          L"an emoji is trimmed to one cluster");
+    Check(gf::NormalizeEmoji(cat + L"hello") == cat,
+          L"text after the emoji is dropped");
+    Check(gf::NormalizeEmoji(family) == family,
+          L"a ZWJ family sequence survives intact");
+    Check(gf::NormalizeEmoji(flag) == flag, L"a regional-indicator flag survives intact");
+    Check(gf::NormalizeEmoji(flag + flag) == flag, L"a second flag is dropped");
+}
+
+void TestEmojiIconBuild() {
+    const std::wstring path = TempFile(L"emoji-test.ico");
+    ::DeleteFileW(path.c_str());
+
+    std::wstring error;
+    const bool rendered = gf::RenderEmojiIcon(L"\xD83D\xDE3A", path, error);
+    Check(rendered, L"the emoji icon renders headlessly");
+    if (rendered) {
+        Check(::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES,
+              L"the emoji icon file is written");
+        Check(gf::IsValidIcoFile(path, error), L"the generated icon has a valid ICONDIR");
+        Check(gf::CountIcoImages(path) == 7, L"the icon contains all seven sizes");
+    }
+
+    const std::wstring missing = TempFile(L"missing-icon.ico");
+    ::DeleteFileW(missing.c_str());
+    Check(!gf::IsValidIcoFile(missing, error), L"a missing icon file is rejected cleanly");
+
+    bool owned = false;
+    HICON icon = gf::LoadConfiguredIcon(nullptr, 0, L"\xD83D\xDE3A", 32, owned);
+    Check(icon != nullptr, L"a configured icon falls back to a system icon");
+    if (icon != nullptr && owned) {
+        ::DestroyIcon(icon);
+    }
+    ::DeleteFileW(path.c_str());
+}
+
+void TestShortcuts() {
+    gf::ShortcutEntry entry;
+    entry.path = L"C:\\Users\\Test\\Desktop\\GhostFrame.lnk";
+    entry.kind = gf::ShortcutKindKey(gf::ShortcutKind::Ui);
+    entry.name = L"GhostFrame";
+    entry.target = L"C:\\Apps\\GhostFrame.exe";
+    entry.arguments = L"";
+    entry.created = L"2026-11-26T12:00:00";
+
+    const std::wstring json = gf::SerializeShortcutManifest({entry});
+    std::vector<gf::ShortcutEntry> parsed;
+    std::wstring error;
+    Check(gf::ParseShortcutManifest(json, parsed, error),
+          L"the shortcut manifest JSON parses back");
+    Check(parsed.size() == 1 && parsed[0].path == entry.path && parsed[0].kind == entry.kind &&
+              parsed[0].name == entry.name && parsed[0].target == entry.target &&
+              parsed[0].arguments == entry.arguments && parsed[0].created == entry.created,
+          L"every manifest field survives the round-trip");
+
+    Check(gf::ShortcutFileStem(L"a/b:c*?") == L"a_b_c__",
+          L"invalid file-name characters are replaced");
+    Check(gf::ShortcutFileStem(L"   ") == L"GhostFrame",
+          L"an empty file stem falls back to GhostFrame");
+    Check(gf::ShortcutWrapperArguments(L"C:\\Apps\\game.exe", L"--capture") ==
+              L"--launch \"C:\\Apps\\game.exe\" --capture",
+          L"the wrapper arguments are built correctly");
+
+    for (int i = 0; i < static_cast<int>(gf::ShortcutLocation::Count); ++i) {
+        Check(!gf::ShortcutLocationPath(static_cast<gf::ShortcutLocation>(i)).empty(),
+              L"every shortcut destination resolves");
+    }
+
+    const std::wstring linkPath = TempFile(L"gf-shortcut-test.lnk");
+    ::DeleteFileW(linkPath.c_str());
+    gf::ShortcutSpec spec;
+    spec.kind = gf::ShortcutKind::Ui;
+    spec.name = L"GfSettingsHost test";
+    spec.description = L"Created by the settings harness";
+    gf::ShortcutEntry created;
+    const bool ok = gf::CreateShortcutAt(linkPath, spec, gf::ExecutablePath(),
+                                         gf::ExecutablePath(), created, error);
+    Check(ok, L"a .lnk file is created with IShellLinkW");
+    Check(ok && gf::ShortcutExists(linkPath), L"the created .lnk exists on disk");
+    Check(ok && created.path == linkPath && created.name == spec.name,
+          L"the created entry describes the link");
+    std::wstring deleteError;
+    Check(gf::DeleteShortcutFile(linkPath, deleteError), L"the test link is removed");
+    Check(!gf::ShortcutExists(linkPath), L"the removed .lnk is gone");
 }
 
 void TestCorruptFile() {
@@ -223,6 +423,16 @@ void TestHotkeyValidation() {
     bare.hotkeys[static_cast<int>(gf::HotkeyAction::Restore)] =
         gf::HotkeyBinding{0, 'K'};
     Check(!gf::ValidateHotkeys(bare, error), L"a modifier-less combination is rejected");
+
+    gf::Settings optional = gf::DefaultSettings();
+    Check(optional.hotkeys[static_cast<int>(gf::HotkeyAction::SelfDestruct)].empty(),
+          L"the self-destruct hotkey starts unset");
+    Check(gf::ValidateHotkeys(optional, error),
+          L"an unset self-destruct hotkey is valid");
+    optional.hotkeys[static_cast<int>(gf::HotkeyAction::SelfDestruct)] =
+        gf::HotkeyBinding{MOD_CONTROL | MOD_SHIFT, VK_F12};
+    Check(gf::ValidateHotkeys(optional, error),
+          L"a rebound self-destruct hotkey is valid");
 }
 
 void TestMatching() {
@@ -274,17 +484,79 @@ void TestGuard() {
     Check(guard.Allow(pid, created, hwnd), L"clearing the guard forgets everything");
 }
 
+void TestSelfDeletePlan() {
+    gf::SelfDeletePaths paths;
+    paths.executable = L"C:\\Apps\\GhostFrame\\bin\\GhostFrame.exe";
+    paths.dataDirectory = L"C:\\Users\\Test\\AppData\\Local\\GhostFrame";
+    paths.installDirectory = L"C:\\Apps\\GhostFrame\\bin";
+    paths.generatedIcon = paths.dataDirectory + L"\\GhostFrame.ico";
+
+    const gf::SelfDeletePlan never = gf::BuildSelfDeletePlan(gf::SelfDeleteMode::Never, paths);
+    Check(!never.removeShortcuts && !never.removeAutostart && never.files.empty() &&
+              never.directories.empty() && never.executable.empty(),
+          L"Never plans nothing");
+
+    const gf::SelfDeletePlan exe = gf::BuildSelfDeletePlan(gf::SelfDeleteMode::ExeOnly, paths);
+    Check(exe.removeShortcuts && exe.removeAutostart,
+          L"ExeOnly removes shortcuts and the startup entry");
+    Check(exe.executable == paths.executable, L"ExeOnly removes the executable last");
+    Check(std::find(exe.files.begin(), exe.files.end(), paths.generatedIcon) != exe.files.end(),
+          L"ExeOnly removes the generated icon");
+    Check(std::find(exe.files.begin(), exe.files.end(),
+                    paths.dataDirectory + L"\\settings.json") == exe.files.end(),
+          L"ExeOnly keeps settings.json");
+    Check(exe.directories.empty(), L"ExeOnly keeps the data directory");
+
+    const gf::SelfDeletePlan all =
+        gf::BuildSelfDeletePlan(gf::SelfDeleteMode::Everything, paths);
+    Check(all.removeShortcuts && all.removeAutostart,
+          L"Everything removes shortcuts and the startup entry");
+    Check(std::find(all.directories.begin(), all.directories.end(), paths.dataDirectory) !=
+              all.directories.end(),
+          L"Everything removes the whole data directory");
+    Check(std::find(all.emptyDirectories.begin(), all.emptyDirectories.end(),
+                    paths.installDirectory) != all.emptyDirectories.end(),
+          L"Everything removes the install directory when it is empty");
+    Check(!gf::IsSafeDataDirectory(L"C:\\"), L"a drive root is not a safe data directory");
+    Check(!gf::IsSafeDataDirectory(L"C:\\Users\\Test\\AppData\\Local"),
+          L"only a path ending in GhostFrame is safe");
+    Check(gf::IsSafeDataDirectory(paths.dataDirectory), L"the normal data directory is safe");
+}
+
+void TestDeleteRetry() {
+    const std::wstring path = TempFile(L"held-file.txt");
+    RemoveFile(path);
+
+    HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    Check(file != INVALID_HANDLE_VALUE, L"the held test file is created");
+    Check(!gf::DeleteFileWithRetry(path, 250),
+          L"a file held by another handle is not deleted immediately");
+    if (file != INVALID_HANDLE_VALUE) {
+        ::CloseHandle(file);
+    }
+    Check(gf::DeleteFileWithRetry(path, 2000),
+          L"the file is deleted once the handle is released");
+    Check(gf::DeleteFileWithRetry(path, 100), L"a missing file counts as removed");
+}
+
 }  // namespace
 
 int wmain() {
     TestDefaults();
     TestRoundTrip();
+    TestAppearanceTabs();
+    TestEmojiNormalization();
+    TestEmojiIconBuild();
+    TestShortcuts();
     TestCorruptFile();
     TestSaveLoad();
     TestHotkeyParsing();
     TestHotkeyValidation();
     TestMatching();
     TestGuard();
+    TestSelfDeletePlan();
+    TestDeleteRetry();
 
     if (g_failures == 0) {
         wprintf(L"PASS\n");

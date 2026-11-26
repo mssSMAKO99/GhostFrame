@@ -44,7 +44,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <PreprocessorDefinitions>_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(GF_SolutionDir)src\launcher;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(GF_SolutionDir)src\core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -54,7 +54,7 @@
 
   <ItemGroup>
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="..\..\src\launcher\ipc_client.cpp" />
+    <ClCompile Include="..\..\src\core\ipc_client.cpp" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

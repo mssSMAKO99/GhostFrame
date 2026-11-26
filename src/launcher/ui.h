@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "icons.h"
+#include "settings.h"
 
 namespace ui {
 
@@ -58,6 +59,10 @@ struct Metrics {
 struct Theme {
     UINT dpi = 96;
     bool highContrast = false;
+    bool compact = false;
+    bool gradientBackground = false;
+    COLORREF backgroundTop = RGB(7, 12, 10);
+    COLORREF backgroundBottom = RGB(7, 12, 10);
     Metrics m;
 
     HFONT brand = nullptr;       // wordmark
@@ -70,7 +75,10 @@ struct Theme {
     HFONT mono = nullptr;        // Consolas, reserved for keys / PIDs
 
     int S(int value) const { return MulDiv(value, static_cast<int>(dpi), 96); }
+    // Scales a list row height for the active density.
+    int RowHeight(int base) const { return compact ? base * 5 / 6 : base; }
     void Create(UINT dpiValue);
+    void Create(UINT dpiValue, const gf::AppearanceSettings& appearance);
     void Destroy();
 };
 
@@ -81,6 +89,7 @@ bool SystemHighContrast();
 COLORREF Blend(COLORREF from, COLORREF to, int percent);
 
 void FillSolid(HDC dc, const RECT& rect, COLORREF color);
+void FillSolidAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha);
 void FillVerticalGradient(HDC dc, const RECT& rect, COLORREF top, COLORREF bottom);
 void FillRoundRect(HDC dc, const RECT& rect, COLORREF color, int radius);
 void FillRoundGradient(HDC dc, const RECT& rect, COLORREF top, COLORREF bottom, int radius);

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{6C1B4E7A-0002-4C55-9E3A-7F0D2B1A0002}</ProjectGuid>
+    <RootNamespace>GhostFrameCore</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Toolset.props" />
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Compile.props" />
+
+  <PropertyGroup>
+    <TargetName>GhostFrame.Core</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(GF_SolutionDir)src\core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="auto_capture.cpp" />
+    <ClCompile Include="autostart.cpp" />
+    <ClCompile Include="branding.cpp" />
+    <ClCompile Include="capture_service.cpp" />
+    <ClCompile Include="emoji_icon.cpp" />
+    <ClCompile Include="exe_branding.cpp" />
+    <ClCompile Include="hotkeys.cpp" />
+    <ClCompile Include="injector.cpp" />
+    <ClCompile Include="ipc_client.cpp" />
+    <ClCompile Include="ipc\daemon_client.cpp" />
+    <ClCompile Include="ipc\pipe_client.cpp" />
+    <ClCompile Include="ipc\pipe_io.cpp" />
+    <ClCompile Include="ipc\pipe_server.cpp" />
+    <ClCompile Include="ipc\remote_capture.cpp" />
+    <ClCompile Include="json.cpp" />
+    <ClCompile Include="launch.cpp" />
+    <ClCompile Include="log.cpp" />
+    <ClCompile Include="session.cpp" />
+    <ClCompile Include="self_delete.cpp" />
+    <ClCompile Include="self_delete_plan.cpp" />
+    <ClCompile Include="settings.cpp" />
+    <ClCompile Include="shortcuts.cpp" />
+    <ClCompile Include="tray.cpp" />
+    <ClCompile Include="window_list.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="auto_capture.h" />
+    <ClInclude Include="autostart.h" />
+    <ClInclude Include="branding.h" />
+    <ClInclude Include="capture_service.h" />
+    <ClInclude Include="emoji_icon.h" />
+    <ClInclude Include="exe_branding.h" />
+    <ClInclude Include="hotkeys.h" />
+    <ClInclude Include="injector.h" />
+    <ClInclude Include="ipc_client.h" />
+    <ClInclude Include="ipc\daemon_client.h" />
+    <ClInclude Include="ipc\pipe_client.h" />
+    <ClInclude Include="ipc\pipe_io.h" />
+    <ClInclude Include="ipc\pipe_server.h" />
+    <ClInclude Include="ipc\remote_capture.h" />
+    <ClInclude Include="json.h" />
+    <ClInclude Include="launch.h" />
+    <ClInclude Include="log.h" />
+    <ClInclude Include="session.h" />
+    <ClInclude Include="self_delete.h" />
+    <ClInclude Include="self_delete_plan.h" />
+    <ClInclude Include="settings.h" />
+    <ClInclude Include="shortcuts.h" />
+    <ClInclude Include="state_snapshot.h" />
+    <ClInclude Include="tray.h" />
+    <ClInclude Include="window_list.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
