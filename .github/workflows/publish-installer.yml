@@ -1,0 +1,96 @@
+name: Publish installer
+
+# Copies install.ps1 into the root of the profile site repository
+# (overcumatosis/overcumatosis.github.io) as `gf` (no extension), so the short
+# command works:
+#
+#   irm overcumatosis.github.io/gf | iex
+#
+# The GitHub token that belongs to this repository cannot write to another
+# repository.  Add a repository secret named GF with a fine-grained personal
+# access token that has "Contents: read and write" on
+# overcumatosis/overcumatosis.github.io.
+#
+# When GF is missing, the job warns and skips instead of failing, so forks and
+# clones without the secret still build and deploy normally.
+
+on:
+  push:
+    branches: [ "main", "main-v2" ]
+    paths:
+      - install.ps1
+      - .github/workflows/publish-installer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-installer
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout GhostFrame
+        uses: actions/checkout@v5
+
+      # install.ps1 is decoded as ANSI by Windows PowerShell 5.1, so a BOM or
+      # any non-ASCII byte would corrupt `irm | iex`.
+      - name: Validate installer
+        run: |
+          set -euo pipefail
+          test -f install.ps1
+          if head -c 3 install.ps1 | od -An -tx1 | tr -d ' \n' | grep -q '^efbbbf$'; then
+            echo "install.ps1 must not start with a UTF-8 BOM"
+            exit 1
+          fi
+          if LC_ALL=C grep -qP '[^\x00-\x7F]' install.ps1; then
+            echo "install.ps1 must stay ASCII-only"
+            exit 1
+          fi
+
+      - name: Check the profile token
+        id: token
+        env:
+          PROFILE_TOKEN: ${{ secrets.GF }}
+        run: |
+          if [ -n "${PROFILE_TOKEN}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=gf was not published::Add a repository secret named GF with Contents: read and write on overcumatosis/overcumatosis.github.io."
+            {
+              echo "### gf was not published"
+              echo
+              echo "Add a repository secret named \`GF\` with a fine-grained PAT that has **Contents: read and write** on \`overcumatosis/overcumatosis.github.io\`, then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Checkout profile site
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: overcumatosis/overcumatosis.github.io
+          token: ${{ secrets.GF }}
+          path: profile
+          fetch-depth: 0
+
+      - name: Publish to the site root
+        if: steps.token.outputs.present == 'true'
+        working-directory: profile
+        run: |
+          set -euo pipefail
+          cp ../install.ps1 gf
+          if git diff --quiet -- gf && git diff --cached --quiet -- gf; then
+            echo "gf is already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gf
+          git commit -m "chore: publish GhostFrame installer (gf) from GhostFrame@${GITHUB_SHA::7}"
+          git push origin HEAD:main

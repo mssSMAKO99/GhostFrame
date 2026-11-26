@@ -1,9 +1,13 @@
 <Solution>
   <Configurations>
     <Platform Name="x64" />
-    <Platform Name="x86" />
   </Configurations>
-  <Project Path="Helper32/Helper32.vcxproj" Id="9d7fae45-cf05-412d-a2fe-b38dd2194c16" />
-  <Project Path="HideHook/HideHook.vcxproj" Id="95c04193-d9f5-47f5-9712-b7083c97ab57" />
-  <Project Path="HookLauncher64/HookLauncher64.vcxproj" Id="e6b28131-77ec-464a-b850-4d4ea3e710a3" />
+  <Project Path="src/agent/GhostFrame.Agent.vcxproj" Id="6c1b4e7a-0001-4c55-9e3a-7f0d2b1a0001" />
+  <Project Path="src/brand/GfBrand.vcxproj" Id="6c1b4e7a-0007-4c55-9e3a-7f0d2b1a0007" />
+  <Project Path="src/core/GhostFrame.Core.vcxproj" Id="6c1b4e7a-0002-4c55-9e3a-7f0d2b1a0002" />
+  <Project Path="src/launcher/GhostFrame.Launcher.vcxproj" Id="6c1b4e7a-0003-4c55-9e3a-7f0d2b1a0003" />
+  <Project Path="tests/target/GfTestTarget.vcxproj" Id="6c1b4e7a-0004-4c55-9e3a-7f0d2b1a0004" />
+  <Project Path="tests/agent_host/GfAgentHost.vcxproj" Id="6c1b4e7a-0005-4c55-9e3a-7f0d2b1a0005" />
+  <Project Path="tests/brand_host/GfBrandHost.vcxproj" Id="6c1b4e7a-0008-4c55-9e3a-7f0d2b1a0008" />
+  <Project Path="tests/settings_host/GfSettingsHost.vcxproj" Id="6c1b4e7a-0006-4c55-9e3a-7f0d2b1a0006" />
 </Solution>

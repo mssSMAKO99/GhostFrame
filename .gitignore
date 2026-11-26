@@ -1,28 +1,30 @@
-# Служебные папки и файлы Visual Studio
+# Build output
+**/Release/
+**/Debug/
+**/build/
+**/dist/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+*.exp
+*.lib
+*.tlog
+*.exe
+
+# Visual Studio
 .vs/
 *.user
 *.suo
 *.aps
-*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
 
-# Все папки компиляции и логов (включая вложенные)
-**/Release/
-**/Debug/
-**/x64/
-**/x86/
-**/TestHookInProcess/
-*.tlog/
+# Local logs
 *.log
-*.recipe
 
-# Скомпилированные бинарники и промежуточные файлы
-*.exe
-*.dll
-*.lib
-*.exp
-*.pdb
-*.iobj
-*.ipdb
-*.obj
-*.res
-*.pch
+# Design-agent working notes (kept locally, not part of the product)
+DESIGN_AGENT.md
+CURRENT_TASK.md

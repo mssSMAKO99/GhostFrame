@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{6C1B4E7A-0003-4C55-9E3A-7F0D2B1A0003}</ProjectGuid>
+    <RootNamespace>GhostFrameLauncher</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Toolset.props" />
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\..\msbuild\Compile.props" />
+
+  <PropertyGroup>
+    <TargetName>GhostFrame</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(GF_SolutionDir)src\core;$(GF_SolutionDir)src\daemon;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(GF_SolutionDir)include;$(GF_PayloadDir);$(MSBuildProjectDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>user32.lib;gdi32.lib;gdiplus.lib;msimg32.lib;shell32.lib;ole32.lib;bcrypt.lib;comdlg32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Manifest>
+      <AdditionalManifestFiles>$(MSBuildProjectDirectory)\app.manifest</AdditionalManifestFiles>
+    </Manifest>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="app.cpp" />
+    <ClCompile Include="..\daemon\daemon.cpp" />
+    <ClCompile Include="icons.cpp" />
+    <ClCompile Include="plugins.cpp" />
+    <ClCompile Include="selftest.cpp" />
+    <ClCompile Include="settings_view.cpp" />
+    <ClCompile Include="shortcuts_view.cpp" />
+    <ClCompile Include="targets_view.cpp" />
+    <ClCompile Include="ui.cpp" />
+    <ClCompile Include="view.cpp" />
+    <ClCompile Include="windows_view.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="app.h" />
+    <ClInclude Include="..\daemon\daemon.h" />
+    <ClInclude Include="icons.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="selftest.h" />
+    <ClInclude Include="settings_view.h" />
+    <ClInclude Include="shortcuts_view.h" />
+    <ClInclude Include="targets_view.h" />
+    <ClInclude Include="ui.h" />
+    <ClInclude Include="view.h" />
+    <ClInclude Include="windows_view.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="app.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\core\GhostFrame.Core.vcxproj">
+      <Project>{6C1B4E7A-0002-4C55-9E3A-7F0D2B1A0002}</Project>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!--
+    Payloads are embedded as RCDATA, so they must exist before the resource
+    compiler runs.  Building them here also keeps a plain "build the launcher"
+    working from a fresh clone, without a manual five-step dance.
+
+    The nested builds get their own IntDir under obj\payload\...: the agent is
+    also a solution project, and sharing obj\GhostFrame.Agent\... would let a
+    parallel `msbuild GhostFrame.slnx /m` write the same .obj/.pdb as the
+    launcher's nested build.  The .res file is deleted so that a rebuilt payload
+    always triggers a fresh resource compile: MSBuild would otherwise only track
+    resources.rc.
+  -->
+  <Target Name="GF_BuildPayloads" BeforeTargets="ResourceCompile">
+    <MakeDir Directories="$(GF_PayloadDir)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\agent\GhostFrame.Agent.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=x64;OutDir=$(GF_PayloadDir);IntDir=$(GF_BuildDir)obj\payload\GhostFrame.Agent\x64\$(Configuration)\;SolutionDir=$(GF_SolutionDir)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\agent\GhostFrame.Agent.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);IntDir=$(GF_BuildDir)obj\payload\GhostFrame.Agent\Win32\$(Configuration)\;SolutionDir=$(GF_SolutionDir)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\helper\GhostFrame.Helper.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32;OutDir=$(GF_PayloadDir);IntDir=$(GF_BuildDir)obj\payload\GhostFrame.Helper\Win32\$(Configuration)\;SolutionDir=$(GF_SolutionDir)" />
+    <Delete Files="$(IntDir)resources.res" />
+  </Target>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

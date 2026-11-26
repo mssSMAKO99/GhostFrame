@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Must be imported right AFTER Microsoft.Cpp.Default.props.
+
+  Leaving $(PlatformToolset) empty makes Microsoft.Cpp.props fall back to the
+  VS2010 toolset (v100) for compatibility with old project files.  At this
+  point $(DefaultPlatformToolset) is already known (v145 for VS 2026, v143 for
+  VS 2022), so use it unless the caller overrode the toolset explicitly.
+-->
+<Project>
+  <PropertyGroup Label="GhostFrame.Toolset">
+    <PlatformToolset Condition="'$(PlatformToolset)' == ''">$(DefaultPlatformToolset)</PlatformToolset>
+  </PropertyGroup>
+</Project>

@@ -1,48 +1,129 @@
-name: Build & Release GhostFrame
+name: Build GhostFrame
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v*" ]
+    branches: [ "main", "main-v2" ]
+    tags: [ "v*", "[0-9]*" ]
+  pull_request:
   workflow_dispatch:
 
+# Read-only by default; only the release job is granted write access.
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Build x86 Payloads (HideHook32 & Helper32)
+      # A release tag must agree with include/ghostframe/version.h, so the asset
+      # name, the release name and the stamped VERSIONINFO cannot drift apart.
+      # Compared numerically and padded to four parts, so 2.0.0.0, v2.0.0.0 and
+      # v2.0.0 are all the same version; the project's tags are numeric.
+      - name: Check the tag against version.h
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=HideHook32 /p:SolutionDir="${{ github.workspace }}\"
-          msbuild Helper32/Helper32.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:TargetName=Helper32 /p:SolutionDir="${{ github.workspace }}\"
+          $tag = '${{ github.ref_name }}'
+          $text = Get-Content include/ghostframe/version.h -Raw
+          $fields = foreach ($field in 'MAJOR', 'MINOR', 'PATCH', 'BUILD') {
+            $match = [regex]::Match($text, "GF_VERSION_$field\s+(\d+)")
+            if (-not $match.Success) { throw "GF_VERSION_$field missing from version.h" }
+            $match.Groups[1].Value
+          }
+          function Get-Parts([string]$value) {
+            $parts = @($value.TrimStart('v') -split '\.' | ForEach-Object { [int]($_ -replace '\D', '') })
+            while ($parts.Count -lt 4) { $parts += 0 }
+            return $parts[0..3]
+          }
+          $tagNorm = (Get-Parts $tag) -join '.'
+          $headerNorm = (Get-Parts ($fields -join '.')) -join '.'
+          if ($tagNorm -ne $headerNorm) {
+            throw "tag $tag does not match version.h ($($fields -join '.'))"
+          }
+          Write-Host "version $headerNorm matches tag $tag"
 
-      - name: Build x64 Payload (HideHook64)
+      - name: Build
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
+
+      - name: Harnesses (deterministic)
+        shell: pwsh
         run: |
-          msbuild HideHook/HideHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetName=HideHook64 /p:SolutionDir="${{ github.workspace }}\"
+          .\build\out\x64\Release\GfAgentHost.exe (Resolve-Path .\build\payload\Release\GhostFrameAgent64.dll).Path
+          if ($LASTEXITCODE -ne 0) { throw "agent harness failed with $LASTEXITCODE" }
+          .\build\out\x64\Release\GfSettingsHost.exe
+          if ($LASTEXITCODE -ne 0) { throw "settings harness failed with $LASTEXITCODE" }
+          .\build\out\x64\Release\GfBrandHost.exe
+          if ($LASTEXITCODE -ne 0) { throw "brand harness failed with $LASTEXITCODE" }
 
-      - name: Build Standalone HookLauncher64.exe
+      # Full end-to-end injection test.  Cross-process hooks are blocked on some
+      # hardened CI images, so a non-zero exit is reported as a warning with the
+      # code and the log instead of being silently swallowed.
+      - name: Injection smoke test
+        continue-on-error: true
+        shell: pwsh
         run: |
-          msbuild HookLauncher64/HookLauncher64.vcxproj /p:Configuration=Release /p:Platform=x64 /p:SolutionDir="${{ github.workspace }}\" /p:OutDir="${{ github.workspace }}\dist\\"
-          ren dist\HookLauncher64.exe GhostFrame.exe
+          $target = Start-Process .\build\out\x64\Release\GfTestTarget.exe -PassThru `
+              -RedirectStandardOutput "$env:TEMP\target.out" `
+              -RedirectStandardError "$env:TEMP\target.err"
+          Start-Sleep -Seconds 1
+          $self = Start-Process .\build\out\x64\Release\GhostFrame.exe -ArgumentList '--selftest' `
+              -Wait -PassThru `
+              -RedirectStandardOutput "$env:TEMP\selftest.out" `
+              -RedirectStandardError "$env:TEMP\selftest.err"
+          $code = $self.ExitCode
+          Stop-Process -Id $target.Id -Force -ErrorAction SilentlyContinue
+          foreach ($log in "$env:TEMP\GhostFrame.selftest.log", "$env:TEMP\GhostFrame\ghostframe.log") {
+            if (Test-Path $log) { Get-Content $log }
+          }
+          if ($code -eq 0) {
+            Write-Host "self-test passed"
+          } else {
+            Write-Host "::warning title=Self-test did not pass::GhostFrame.exe --selftest exited with code $code on this runner; cross-process hooks are often blocked in CI."
+          }
+          exit 0
 
-      - name: Upload Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
-          name: GhostFrame-Standalone-x64
-          path: dist/GhostFrame.exe
+          name: GhostFrame-x64
+          path: dist/
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: GhostFrame-x64
+          path: dist
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/GhostFrame.exe
+          files: |
+            dist/GhostFrame.exe
+            dist/GhostFrame.exe.sha256
+            dist/GfBrand.exe
+            dist/GfBrand.exe.sha256
+            dist/GhostFrame-*.zip
+            install.ps1
           generate_release_notes: true
